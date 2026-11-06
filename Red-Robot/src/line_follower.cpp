@@ -54,20 +54,36 @@ constexpr float kAutoKdRatio = 0.06f;  // Kd = kAutoKdRatio * Kp (LF-2: 10x in
 // and sensor order before letting the robot drive.
 constexpr bool kCalibrationTestMode = false;
 
-// When true, sweep-calibrate at the start of autonomous (about 3 s).
-// When false, skip it and use kSavedMin / kSavedMax. Copy those from the
-// calibration test output on the real field.
+// When true, calibrate at the start of autonomous (sweep or full rotation,
+// see below). When false, skip it and use kSavedMin / kSavedMax. Copy those
+// from the calibration test output on the real field.
 constexpr bool kCalibrateAtStart = true;
 constexpr int kNumSensors = 6;
 constexpr uint16_t kSavedMin[kNumSensors] = {100, 100, 100, 100, 100, 100};
 constexpr uint16_t kSavedMax[kNumSensors] = {2000, 2000, 2000, 2000, 2000,
                                              2000};
 
-constexpr uint32_t kCalibrationDurationMs = 3000;
+// Calibration motion:
+//   true  = FULL ROTATION: spin in place like LF-2. Every sensor passes over
+//           the tape (about 2 crossings per sensor per turn), but the robot
+//           only ends facing its start direction if kFullRotationMs is right.
+//   false = SWEEP: wiggle left/right over the line. Ends facing about the same
+//           way, but sensors only cross the tape if the line is under the
+//           robot at the start.
+constexpr bool kCalibrationFullRotation = false;
+// Time for ONE 360-degree turn at kCalibrationSpeed. Measure it: the
+// calibration printout reports tape crossings per sensor; aim for ~2 per
+// sensor per rotation. Fewer = increase this, more = decrease it.
+constexpr uint32_t kFullRotationMs = 2000;
+constexpr int kFullRotations = 1;               // Number of turns.
+constexpr bool kFullRotationClockwise = true;   // Spin direction.
+
+constexpr uint32_t kCalibrationDurationMs = 3000;  // Sweep mode only.
 constexpr uint32_t kCalibrationSweepMs = 500;  // Time per sweep direction.
-constexpr int kCalibrationSpeed = 35;          // Pivot speed while sweeping.
+constexpr int kCalibrationSpeed = 35;          // Pivot speed (both modes).
 constexpr uint16_t kMinUsefulRange = 300;      // us. Smaller: never saw tape.
 constexpr uint16_t kSensorTimeoutUs = 10000;   // Library's read timeout.
+constexpr int kMaxCalibrationSamples = 600;    // Buffer for crossing count.
 
 // ============================ Debug printing ===============================
 constexpr bool kDebugPrint = true;
@@ -125,6 +141,9 @@ struct PidTerms {
 
 uint16_t g_min[kNumSensors];
 uint16_t g_max[kNumSensors];
+// Raw calibration samples, kept so we can count tape crossings afterwards.
+uint16_t g_cal_samples[kMaxCalibrationSamples][kNumSensors];
+int g_cal_sample_count = 0;
 bool g_initialized = false;
 uint32_t g_auton_start_ms = 0;
 uint32_t g_last_step_ms = 0;
@@ -199,9 +218,41 @@ void ReadSensors(SensorReading* reading) {
       reading->line_visible ? weighted_sum / reading->strength : 0.0f;
 }
 
+// Counts how many times sensor `s` moved from floor onto tape during
+// calibration, using the final threshold with a 15% hysteresis band so noise
+// near the threshold is not counted twice.
+int CountTapeCrossings(int s) {
+  const int range = static_cast<int>(g_max[s]) - static_cast<int>(g_min[s]);
+  if (range < kMinUsefulRange || g_cal_sample_count == 0) return 0;
+  const int band = range * 15 / 100;
+  const int high = (g_min[s] + g_max[s]) / 2 + band;  // Clearly on tape.
+  const int low = (g_min[s] + g_max[s]) / 2 - band;   // Clearly on floor.
+  // With kLineReadsHigher, "on tape" means a high reading; otherwise low.
+  bool on_tape = kLineReadsHigher ? g_cal_samples[0][s] >= high
+                                  : g_cal_samples[0][s] <= low;
+  int crossings = 0;
+  for (int k = 1; k < g_cal_sample_count; ++k) {
+    const int v = g_cal_samples[k][s];
+    const bool now_on = kLineReadsHigher ? v >= high : v <= low;
+    const bool now_off = kLineReadsHigher ? v <= low : v >= high;
+    if (!on_tape && now_on) {
+      on_tape = true;
+      ++crossings;
+    } else if (on_tape && now_off) {
+      on_tape = false;
+    }
+  }
+  return crossings;
+}
+
 void PrintCalibration(uint32_t duration_ms, int samples) {
   Serial.printf("[CAL] Done: %lu ms, %d samples (S0 = robot's far left)\n",
                 static_cast<unsigned long>(duration_ms), samples);
+  if (samples > kMaxCalibrationSamples) {
+    Serial.printf("[CAL] NOTE: only the first %d samples were kept for the "
+                  "crossing count (min/max used all %d).\n",
+                  kMaxCalibrationSamples, samples);
+  }
   Serial.println("[CAL] sensor  min_us  max_us  range_us  threshold_us");
   bool all_ok = true;
   for (int i = 0; i < kNumSensors; ++i) {
@@ -224,6 +275,43 @@ void PrintCalibration(uint32_t duration_ms, int samples) {
   }
   Serial.println(all_ok ? "[CAL] All sensors have a usable range."
                         : "[CAL] Sensors with a bad range are IGNORED.");
+
+  // Tape crossings: tells you whether the motion actually covered the line,
+  // and in full-rotation mode whether kFullRotationMs is about one turn.
+  Serial.print("[CAL] tape crossings per sensor: [");
+  int total = 0;
+  int counted = 0;
+  for (int i = 0; i < kNumSensors; ++i) {
+    const int crossings = CountTapeCrossings(i);
+    Serial.printf("%d%s", crossings, i < kNumSensors - 1 ? " " : "]\n");
+    if (g_max[i] - g_min[i] >= kMinUsefulRange) {
+      total += crossings;
+      ++counted;
+    }
+  }
+  if (kCalibrationFullRotation && counted > 0) {
+    const float average = static_cast<float>(total) / counted;
+    const int expected = 2 * kFullRotations;
+    Serial.printf("[CAL] Full rotation: average %.1f crossings/sensor, "
+                  "expected ~%d for %d turn(s) of %lu ms.\n",
+                  average, expected, kFullRotations,
+                  static_cast<unsigned long>(kFullRotationMs));
+    if (average < expected - 0.5f) {
+      Serial.printf("[CAL] -> Turned LESS than %d full turn(s). Increase "
+                    "kFullRotationMs (try ~%lu).\n",
+                    kFullRotations,
+                    static_cast<unsigned long>(kFullRotationMs * expected /
+                                               max(average, 0.5f)));
+    } else if (average > expected + 0.5f) {
+      Serial.printf("[CAL] -> Turned MORE than %d full turn(s). Decrease "
+                    "kFullRotationMs (try ~%lu).\n",
+                    kFullRotations,
+                    static_cast<unsigned long>(kFullRotationMs * expected /
+                                               average));
+    } else {
+      Serial.println("[CAL] -> Rotation time looks right.");
+    }
+  }
   Serial.println("[CAL] To skip calibration in matches, set "
                  "kCalibrateAtStart = false and paste:");
   Serial.print("constexpr uint16_t kSavedMin[kNumSensors] = {");
@@ -236,28 +324,47 @@ void PrintCalibration(uint32_t duration_ms, int samples) {
   }
 }
 
-// Sweeps left and right over the line, recording each sensor's min and max.
-// The sweep is symmetric, so the robot ends facing about where it started.
+// Moves over the line while recording each sensor's min and max.
+//   Sweep mode: symmetric left/right wiggle, so the robot ends facing about
+//   where it started.
+//   Full-rotation mode: constant spin in place (like LF-2) for
+//   kFullRotations turns, timed by kFullRotationMs.
 void Calibrate() {
-  Serial.printf("[CAL] Sweeping for %lu ms at speed %d. Start over the line.\n",
-                static_cast<unsigned long>(kCalibrationDurationMs),
-                kCalibrationSpeed);
+  const uint32_t duration_ms =
+      kCalibrationFullRotation ? kFullRotationMs * kFullRotations
+                               : kCalibrationDurationMs;
+  if (kCalibrationFullRotation) {
+    Serial.printf("[CAL] Full rotation: %d turn(s) %s, %lu ms at speed %d.\n",
+                  kFullRotations,
+                  kFullRotationClockwise ? "clockwise" : "counterclockwise",
+                  static_cast<unsigned long>(duration_ms), kCalibrationSpeed);
+  } else {
+    Serial.printf("[CAL] Sweep: %lu ms at speed %d. Start over the line.\n",
+                  static_cast<unsigned long>(duration_ms), kCalibrationSpeed);
+  }
   for (int i = 0; i < kNumSensors; ++i) {
     g_min[i] = UINT16_MAX;
     g_max[i] = 0;
   }
+  g_cal_sample_count = 0;
 
   const uint32_t start_ms = millis();
   int samples = 0;
   uint32_t elapsed_ms = 0;
-  while ((elapsed_ms = millis() - start_ms) < kCalibrationDurationMs) {
+  while ((elapsed_ms = millis() - start_ms) < duration_ms) {
     if (RedRobot::IsRemoteControlled()) {
       Serial.println("[CAL] Aborted: remote control took over.");
       break;
     }
-    // Phases: half sweep left, then alternate full sweeps, end with half left.
-    const bool turn_left =
-        ((elapsed_ms + kCalibrationSweepMs / 2) / kCalibrationSweepMs) % 2 == 0;
+    bool turn_left;
+    if (kCalibrationFullRotation) {
+      turn_left = !kFullRotationClockwise;  // Seen from above.
+    } else {
+      // Phases: half sweep left, alternate full sweeps, end with half left.
+      turn_left =
+          ((elapsed_ms + kCalibrationSweepMs / 2) / kCalibrationSweepMs) % 2 ==
+          0;
+    }
     if (turn_left) {
       SetDrive(-kCalibrationSpeed, kCalibrationSpeed);
     } else {
@@ -266,12 +373,15 @@ void Calibrate() {
 
     uint16_t hw[kNumSensors];
     RedRobot::ReadLineSensor(hw);
+    const bool keep = g_cal_sample_count < kMaxCalibrationSamples;
     for (int i = 0; i < kNumSensors; ++i) {
       const uint16_t value =
           hw[kReverseSensorOrder ? (kNumSensors - 1 - i) : i];
       if (value < g_min[i]) g_min[i] = value;
       if (value > g_max[i]) g_max[i] = value;
+      if (keep) g_cal_samples[g_cal_sample_count][i] = value;
     }
+    if (keep) ++g_cal_sample_count;
     ++samples;
   }
   SetDrive(0, 0);
@@ -283,6 +393,8 @@ void PrintConfig() {
   Serial.printf("[LF] mode=%s  auto_gain=%s  calibrate_at_start=%s\n",
                 kCalibrationTestMode ? "CALIBRATION_TEST" : "FOLLOW",
                 kUseAutoGain ? "ON" : "OFF", kCalibrateAtStart ? "YES" : "NO");
+  Serial.printf("[LF] calibration motion=%s\n",
+                kCalibrationFullRotation ? "FULL_ROTATION" : "SWEEP");
   if (kUseAutoGain) {
     Serial.printf("[LF] Kp=%.2f..%.2f (auto)  Ki=%.3f  Kd=%.3f*Kp\n",
                   kAutoKpMin, kAutoKpMax, kKi, kAutoKdRatio);
