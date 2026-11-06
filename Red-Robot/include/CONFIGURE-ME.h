@@ -12,4 +12,6 @@ const uint8_t TEAM_NUMBER = 25;
 const char *TEAM_NAME = "teddy";
 
 /* Comment this out to receive less verbose debug packets over serial.*/
-#define REDROBOT_DEBUG 1 
+// Off: it prints a line on EVERY motor write, which floods the line
+// follower's [LF] / [CAL] / [TEST] output and slows the control loop.
+// #define REDROBOT_DEBUG 1
