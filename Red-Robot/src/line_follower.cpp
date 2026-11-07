@@ -59,7 +59,7 @@ constexpr bool kCalibrationTestMode = true;
 // so every sensor passes over the tape. Safe on a desk / plugged into USB.
 // When true, the robot sweeps or spins by itself (see below).
 constexpr bool kCalibrationUseMotors = false;
-constexpr uint32_t kHandCalibrationMs = 6000;
+constexpr uint32_t kHandCalibrationMs = 10000;
 
 // When true, calibrate at the start of autonomous (sweep or full rotation,
 // see below). When false, skip it and use kSavedMin / kSavedMax. Copy those
@@ -481,8 +481,18 @@ void RunCalibrationTest(uint32_t now_ms) {
 
 void Initialize() {
   g_initialized = true;
+  if (kCalibrationTestMode) {
+    // Wait (up to 15 s) for a serial monitor so the calibration output is
+    // not lost, then count down so you can get ready to move the robot.
+    const uint32_t wait_start = millis();
+    while (!Serial && millis() - wait_start < 15000) delay(10);
+  }
   PrintConfig();
   if (kCalibrationTestMode) {
+    for (int s = 3; s > 0; --s) {
+      Serial.printf("[CAL] Calibration starts in %d...\n", s);
+      delay(1000);
+    }
     Calibrate();
     Serial.println(
         "[TEST] Motors stopped. Slide the tape under the robot: the tape "

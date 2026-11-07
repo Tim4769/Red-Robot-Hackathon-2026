@@ -6,7 +6,7 @@
 
 // true: run the one-by-one motor/servo test (src/hardware_test.cpp) once
 // instead of the line follower. Set false for normal autonomous.
-constexpr bool kHardwareTestMode = true;
+constexpr bool kHardwareTestMode = false;
 
 // initialize any variables here
 void setup() {
