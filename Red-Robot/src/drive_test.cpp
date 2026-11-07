@@ -35,10 +35,10 @@ constexpr uint32_t kLineEndTimeoutMs = 20000;  // Give up if it never ends.
 constexpr int kBackSpeed = 40;
 constexpr uint32_t kBackMs = 500;
 constexpr int kTurnSpeed = 35;
-// No encoder/gyro: 120 degrees is TIMED. Default = 1/3 of a full turn using
-// the 2000 ms-per-turn-at-35% guess. Measure with test 4 (spin) and adjust,
-// or pass it: "9 700" = 700 ms turn.
-constexpr uint32_t kTurn120Ms = 667;
+// No encoder/gyro: 120 degrees is TIMED. On the robot, 667 ms turned ~90 deg
+// (~7.4 ms/deg at 35%), so 120 deg ~ 890 ms. Battery level changes this; to
+// try another value without re-uploading: "9 950" = 950 ms turn.
+constexpr uint32_t kTurn120Ms = 890;
 constexpr int kForwardSpeed = 40;
 constexpr uint32_t kForwardMs = 1000;         // Or pass it: "9 700 1200".
 
