@@ -21,6 +21,8 @@ constexpr uint32_t kServoStepMs = 700;
 // Drive test wiring: which port drives which wheel.
 constexpr uint8_t kLeftDriveMotor = 0;
 constexpr uint8_t kRightDriveMotor = 2;
+constexpr bool kInvertLeftDrive = true;   // Left wheel is wired backward.
+constexpr bool kInvertRightDrive = false;
 constexpr int kDriveSpeed = 50;           // Percent.
 constexpr uint32_t kDriveRunMs = 1000;    // Per maneuver.
 
@@ -109,18 +111,22 @@ void RunDriveOnce() {
   if (g_done) return;
   g_done = true;
   WaitForMonitor("Drive test: forward, backward, turn left, turn right");
-  Serial.printf("[DRIVE] left = motor %u, right = motor %u, speed %d%%, "
-                "%lu ms each\n",
-                kLeftDriveMotor, kRightDriveMotor, kDriveSpeed,
-                static_cast<unsigned long>(kDriveRunMs));
+  Serial.printf("[DRIVE] left = motor %u%s, right = motor %u%s, speed %d%%, "
+                "%lu ms each. L/R below are wheel directions (before "
+                "inversion).\n",
+                kLeftDriveMotor, kInvertLeftDrive ? " (inverted)" : "",
+                kRightDriveMotor, kInvertRightDrive ? " (inverted)" : "",
+                kDriveSpeed, static_cast<unsigned long>(kDriveRunMs));
 
   const int total = sizeof(kManeuvers) / sizeof(kManeuvers[0]);
   for (int i = 0; i < total; ++i) {
     const Maneuver& m = kManeuvers[i];
     Serial.printf("[DRIVE] %d/%d %s: L=%+d R=%+d (expect: %s)\n", i + 1,
                   total, m.name, m.left, m.right, m.expect);
-    RedRobot::WriteDCMotor(kLeftDriveMotor, m.left);
-    RedRobot::WriteDCMotor(kRightDriveMotor, m.right);
+    RedRobot::WriteDCMotor(kLeftDriveMotor,
+                           kInvertLeftDrive ? -m.left : m.left);
+    RedRobot::WriteDCMotor(kRightDriveMotor,
+                           kInvertRightDrive ? -m.right : m.right);
     delay(kDriveRunMs);
     RedRobot::WriteDCMotor(kLeftDriveMotor, 0);
     RedRobot::WriteDCMotor(kRightDriveMotor, 0);

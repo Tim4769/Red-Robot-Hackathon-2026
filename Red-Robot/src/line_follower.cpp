@@ -100,7 +100,9 @@ constexpr uint32_t kTestPrintPeriodMs = 200;   // Calibration test stream.
 // ============================== Robot setup ================================
 constexpr uint8_t kLeftMotor = 0;   // Wired: motor port 0 = left wheel.
 constexpr uint8_t kRightMotor = 2;  // Wired: motor port 2 = right wheel.
-constexpr bool kInvertLeftMotor = false;   // Flip if the wheel spins backward.
+// Left wheel spins backward for positive speed (drive test: "forward" turned
+// left, "turn left" went forward), so it is inverted.
+constexpr bool kInvertLeftMotor = true;
 constexpr bool kInvertRightMotor = false;
 // Flip if the position sign is backwards (line on the left reads positive).
 constexpr bool kReverseSensorOrder = false;
