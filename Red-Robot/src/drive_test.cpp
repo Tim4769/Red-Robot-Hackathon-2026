@@ -89,6 +89,36 @@ bool Countdown() {
   return Wait(kCountdownMs);
 }
 
+// Prints `prompt`, then waits (no time limit) for Enter. Typing anything
+// else before Enter cancels. Returns true only on a bare Enter. Motors are
+// stopped while waiting.
+bool WaitForEnter(const char* prompt) {
+  Stop();
+  Serial.printf("[DT] >>> %s\n", prompt);
+  Serial.print("[DT] >>> Press Enter to START (type anything + Enter to "
+               "cancel): ");
+  bool typed = false;
+  while (true) {
+    if (RedRobot::IsRemoteControlled()) {
+      Serial.println("\n[DT] Cancelled: remote control took over.");
+      return false;
+    }
+    while (Serial.available() > 0) {
+      const int c = Serial.read();
+      if (c == '\r' || c == '\n') {
+        Serial.println();
+        delay(20);  // Swallow the other half of CRLF.
+        while (Serial.available() > 0) Serial.read();
+        if (typed) Serial.println("[DT] Cancelled.");
+        return !typed;
+      }
+      typed = true;
+      Serial.print(static_cast<char>(c));
+    }
+    delay(10);
+  }
+}
+
 // Drives for `ms` and stops. Returns false if aborted.
 bool DriveFor(int left, int right, uint32_t ms) {
   SetDrive(left, right);
@@ -156,21 +186,29 @@ void RunStraight(int speed, int ms) {
                  "'trim 100 95'. Then run straight again.");
 }
 
-void RunSweep(int ms, int pause_ms) {
+void RunSweep(int ms, int) {
   if (ms <= 0) ms = 1000;
-  if (pause_ms <= 0) pause_ms = 3000;
   constexpr int kSpeeds[] = {30, 50, 70, 100};
-  Serial.printf("[DT] Speed sweep: forward at 30/50/70/100%% for %d ms each, "
-                "%d ms pause to measure between.\n",
-                ms, pause_ms);
+  Serial.printf("[DT] Speed sweep: forward at 30/50/70/100%% for %d ms each. "
+                "It waits for Enter before each speed.\n",
+                ms);
+  bool first = true;
   for (const int speed : kSpeeds) {
+    if (!first) {
+      char prompt[96];
+      snprintf(prompt, sizeof(prompt),
+               "Put the robot back on the START mark, facing the same way, "
+               "for %d%%.",
+               speed);
+      if (!WaitForEnter(prompt)) return;
+    }
+    first = false;
     if (!Countdown()) return;
     Serial.printf("[DT]   %3d%% for %d ms\n", speed, ms);
     if (!DriveFor(speed, speed, ms)) return;
-    Serial.printf("[DT]   Measure distance D (cm): speed = D / %.1f s. "
-                  "Reposition now.\n",
+    Serial.printf("[DT]   Measure distance D (cm) from the start mark: "
+                  "speed = D / %.1f s.\n",
                   ms / 1000.0f);
-    if (!Wait(pause_ms)) return;
   }
   Serial.println("[DT] Done.");
 }
@@ -257,26 +295,57 @@ void RunFollow(int seconds, int) {
 struct DriveTest {
   const char* name;
   const char* args;
-  const char* description;
+  const char* description;  // One line for the menu.
+  const char* place;        // Where to put the robot before starting.
+  const char* does;         // What the robot will do.
   void (*run)(int, int);
 };
 
 constexpr DriveTest kTests[] = {
     {"deadband", "[step% hold_ms]", "Ramp each wheel 0->100%: where it starts",
+     "WHEELS OFF THE GROUND (robot on a box), so you can watch each wheel.",
+     "Left wheel alone ramps 5%, 10% ... 100% (0.7 s each), then the right "
+     "wheel. Note the % where each wheel first turns steadily.",
      RunDeadband},
     {"straight", "[speed ms]", "Both wheels forward (50%, 3 s): check drift",
+     "On the FLOOR with ~1.5 m clear ahead. Mark the start with tape and "
+     "line the robot up with a straight edge (floor tile line).",
+     "Drives straight forward at 50% for 3 s, then stops. Measure distance "
+     "and how far it drifted left/right.",
      RunStraight},
-    {"sweep", "[ms pause_ms]", "Forward 30/50/70/100%, 1 s each: speed",
+    {"sweep", "[ms]", "Forward 30/50/70/100%, 1 s each: speed",
+     "On the FLOOR with ~1.5 m clear ahead. Mark a START line with tape.",
+     "Drives forward 1 s at 30%, then 50%, 70%, 100%. After each run it "
+     "stops and waits for Enter so you can measure and reposition.",
      RunSweep},
     {"spin", "[speed ms]", "Pivot right (35%, 2 s): count degrees",
+     "On the FLOOR, ~40 cm clear all around. Note which way it faces (line "
+     "it up with a tape mark or tile line).",
+     "Spins in place to the RIGHT at 35% for 2 s, then stops. Count how "
+     "many degrees it turned.",
      RunSpin},
     {"stress", "[cycles speed]", "Fast forward/back flips: brownout check",
+     "WHEELS OFF THE GROUND is safest (on the floor it lurches ~10 cm each "
+     "way).",
+     "Flips full forward / full backward every 0.3 s, 10 times. If the "
+     "battery sags too far the board reboots, and it tells you after.",
      RunStress},
     {"endurance", "[seconds speed]", "Back and forth (60 s, 70%): heat/battery",
+     "WHEELS OFF THE GROUND, or on the floor with ~1 m clear front and back.",
+     "Drives forward 1 s, backward 1 s at 70% for 60 s, printing every 10 s. "
+     "Afterwards, feel the motors and check the battery display.",
      RunEndurance},
     {"calibrate", "", "Line sensor calibration (hand: slide over tape)",
+     "Robot ON THE FLOOR next to the black tape line. Motors stay OFF.",
+     "For 10 s after you press Enter, SLIDE the robot by hand back and forth "
+     "across the tape so every sensor passes over it. Then it prints each "
+     "sensor's floor/tape range.",
      RunCalibrate},
     {"follow", "[seconds]", "Line follow (10 s), prints PID status",
+     "PLACE THE ROBOT ON THE LINE: sensor bar centered over the tape, robot "
+     "facing along the line. Run 'calibrate' first.",
+     "Follows the line for 10 s at base speed 45% using PID, printing a "
+     "status line every 0.1 s. Any key stops it.",
      RunFollow},
 };
 constexpr int kNumTests = sizeof(kTests) / sizeof(kTests[0]);
@@ -356,13 +425,20 @@ void Execute(char* line) {
     return;
   }
 
-  Serial.printf("[DT] ----- %d %s -----\n", index + 1, kTests[index].name);
-  // Drop the rest of the Enter key (CR/LF) so it doesn't abort the test.
+  const DriveTest& test = kTests[index];
+  Serial.printf("[DT] ----- %d %s -----\n", index + 1, test.name);
+  Serial.printf("[DT] PLACE THE ROBOT: %s\n", test.place);
+  Serial.printf("[DT] WHAT IT DOES:    %s\n", test.does);
+  if (a1 != nullptr) {
+    Serial.printf("[DT] (custom args: %s %s)\n", a1, a2 != nullptr ? a2 : "");
+  }
+  // Drop the rest of the Enter key (CR/LF) so it isn't taken as "start".
   delay(20);
   while (Serial.available() > 0) Serial.read();
-  kTests[index].run(arg1, arg2);
+  if (!WaitForEnter("Place the robot as above.")) return;
+  test.run(arg1, arg2);
   Stop();
-  Serial.printf("[DT] ----- end of %s -----\n", kTests[index].name);
+  Serial.printf("[DT] ----- end of %s -----\n", test.name);
 }
 
 }  // namespace
