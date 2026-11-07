@@ -154,6 +154,7 @@ uint16_t g_max[kNumSensors];
 uint16_t g_cal_samples[kMaxCalibrationSamples][kNumSensors];
 int g_cal_sample_count = 0;
 bool g_initialized = false;
+int g_last_on_line_count = 0;  // For auton: sensors on the line, last step.
 uint32_t g_auton_start_ms = 0;
 uint32_t g_last_step_ms = 0;
 uint32_t g_last_pid_us = 0;
@@ -538,6 +539,10 @@ void Update() {
 
   SensorReading reading;
   ReadSensors(&reading);
+  g_last_on_line_count = 0;
+  for (int i = 0; i < kNumSensors; ++i) {
+    if (reading.on_line[i]) ++g_last_on_line_count;
+  }
 
   const uint32_t now_us = micros();
   const float dt_s = (now_us - g_last_pid_us) / 1e6f;
@@ -618,5 +623,32 @@ void Update() {
     PrintStatus(now_ms, dt_s * 1000.0f, reading, pid, speed, left, right);
   }
 }
+
+// ------------------------- Hooks for src/auton.cpp -------------------------
+
+void Init() {
+  if (!g_initialized) Initialize();
+}
+
+void StartFollowing() {
+  if (!g_initialized) Initialize();
+  ResetPid();
+  g_mode = Mode::kPid;
+  g_auton_start_ms = millis();  // Restart the kAutonDurationMs safety timer.
+  g_last_step_ms = 0;
+  g_last_pid_us = micros();
+  g_last_on_line_count = 0;
+}
+
+bool SeesLine() {
+  if (!g_initialized) Initialize();
+  SensorReading reading;
+  ReadSensors(&reading);
+  return reading.line_visible;
+}
+
+int LastOnLineCount() { return g_last_on_line_count; }
+
+bool IsCalibrationTestMode() { return kCalibrationTestMode; }
 
 }  // namespace line_follower

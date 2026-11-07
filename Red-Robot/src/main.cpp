@@ -1,15 +1,18 @@
 #include <Arduino.h>
 #include <RedRobot.h>
 
+#include "auton.h"
 #include "hardware_test.h"
 #include "line_follower.h"
 
 // What AutonomousLoop() runs:
-//   kLineFollower = normal autonomous (src/line_follower.cpp)
+//   kFullAuton    = the match routine: leave box, find line, follow it, drop
+//                   pipe, stop (src/auton.cpp)
+//   kLineFollower = line following only (src/line_follower.cpp)
 //   kActuatorTest = each motor, then each servo, one by one, once
 //   kDriveTest    = forward, backward, pivot left, pivot right, once
-enum class AutonMode { kLineFollower, kActuatorTest, kDriveTest };
-constexpr AutonMode kAutonMode = AutonMode::kLineFollower;
+enum class AutonMode { kFullAuton, kLineFollower, kActuatorTest, kDriveTest };
+constexpr AutonMode kAutonMode = AutonMode::kFullAuton;
 
 // initialize any variables here
 void setup() {
@@ -25,6 +28,9 @@ void setup() {
 // "Working auton toggle; example starter code").
 void AutonomousLoop() {
   switch (kAutonMode) {
+    case AutonMode::kFullAuton:
+      auton::Update();  // Stages and tuning: src/auton.cpp
+      break;
     case AutonMode::kActuatorTest:
       hardware_test::RunOnce();
       break;
