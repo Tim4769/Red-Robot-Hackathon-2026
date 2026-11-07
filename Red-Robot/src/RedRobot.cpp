@@ -9,9 +9,13 @@
 #include "pinouts.h"
 #include "ble.h"
 
-#define SERVO_MIN_PULSEWIDTH_US 500
-#define SERVO_MAX_PULSEWIDTH_US 2500
-#define SERVO_MIN_DEGREE -180
+// Changed: was -180..180 deg -> 500..2500 us, so SetServo(0..180) (the
+// documented range) only reached center -> one end (~100 deg of real travel)
+// and 180 overdrove an HS-311 past its ~2460 us limit. Now 0..180 maps onto
+// the HS-311's usable 600..2400 us, i.e. ~0..180 deg of real motion.
+#define SERVO_MIN_PULSEWIDTH_US 600
+#define SERVO_MAX_PULSEWIDTH_US 2400
+#define SERVO_MIN_DEGREE 0
 #define SERVO_MAX_DEGREE 180
 
 #define SERVO_LEDC_MAX_DUTY 16383
