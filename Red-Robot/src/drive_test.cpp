@@ -28,8 +28,11 @@ constexpr uint32_t kCountdownMs = 3000;  // Before any test that drives.
 constexpr uint32_t kStressMarker = 0x5752E55A;
 
 // ===================== Test 9: line end -> back, turn ======================
-// Follow the line; after kLineEndArmMs, when the line ends: back up, turn
+// Drive straight forward first (kStartForwardMs), then follow the line;
+// after kLineEndArmMs of following, when the line ends: back up, turn
 // RIGHT ~120 degrees, drive forward, stop.
+constexpr int kStartForwardSpeed = 40;
+constexpr uint32_t kStartForwardMs = 2000;
 constexpr uint32_t kLineEndArmMs = 3000;      // Only check for the end after.
 constexpr uint32_t kLineEndTimeoutMs = 20000;  // Give up if it never ends.
 constexpr int kBackSpeed = 40;
@@ -308,14 +311,20 @@ void RunFollow(int seconds, int) {
 void RunLineEnd(int turn_ms, int forward_ms) {
   const uint32_t turn = turn_ms > 0 ? turn_ms : kTurn120Ms;
   const uint32_t forward = forward_ms > 0 ? forward_ms : kForwardMs;
-  Serial.printf("[DT] Line end: follow; after %lu ms, when the line ends: "
-                "back %d%% %lu ms, turn RIGHT %d%% %lu ms (~120 deg), "
-                "forward %d%% %lu ms, stop.\n",
+  Serial.printf("[DT] Line end: forward %d%% %lu ms, then follow; after %lu "
+                "ms of following, when the line ends: back %d%% %lu ms, turn "
+                "RIGHT %d%% %lu ms (~120 deg), forward %d%% %lu ms, stop.\n",
+                kStartForwardSpeed, static_cast<unsigned long>(kStartForwardMs),
                 static_cast<unsigned long>(kLineEndArmMs), kBackSpeed,
                 static_cast<unsigned long>(kBackMs), kTurnSpeed,
                 static_cast<unsigned long>(turn), kForwardSpeed,
                 static_cast<unsigned long>(forward));
   if (!Countdown()) return;
+  Serial.printf("[DT]   0/3 forward %lu ms before following\n",
+                static_cast<unsigned long>(kStartForwardMs));
+  if (!DriveFor(kStartForwardSpeed, kStartForwardSpeed, kStartForwardMs)) {
+    return;
+  }
   if (!line_follower::FollowUntilLineEnds(kLineEndArmMs, kLineEndTimeoutMs,
                                           &ShouldAbort)) {
     return;  // Timed out or aborted; it already printed why.
@@ -392,8 +401,9 @@ constexpr DriveTest kTests[] = {
     {"lineend", "[turn_ms fwd_ms]", "Follow; at line end: back, right 120, fwd",
      "PLACE THE ROBOT ON THE LINE (centered, facing along it), with the end "
      "of the line ahead and ~50 cm clear to the right.",
-     "Follows the line. After 3 s, when the line ends: back 0.5 s, turn "
-     "RIGHT ~120 deg (timed), forward 1 s, stop. Any key stops it.",
+     "Drives straight forward 2 s, then follows the line. After 3 s of "
+     "following, when the line ends: back 0.5 s, turn RIGHT ~120 deg "
+     "(timed), forward 1 s, stop. Any key stops it.",
      RunLineEnd},
 };
 constexpr int kNumTests = sizeof(kTests) / sizeof(kTests[0]);
