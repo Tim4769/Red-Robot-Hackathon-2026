@@ -23,6 +23,7 @@
 // correction < 0 slows the left wheel, so the robot turns toward the line.
 
 #include "line_follower.h"
+#include "line_tracking.h"
 
 #include <Arduino.h>
 #include <RedRobot.h>
@@ -125,12 +126,31 @@ constexpr float kOnLineThreshold = 0.5f;  // LF-2's (min + max) / 2 midpoint.
 constexpr float kNoiseFloor = 0.1f;       // Ignore weaker readings.
 constexpr float kLostLineSum = 0.3f;      // Total below this: line is lost.
 
+// =============================== Crossings =================================
+// When true, a crossing line can't pull the robot off its line (logic in
+// include/line_tracking.h):
+//   * only the group of sensors closest to where our line was is followed,
+//   * a group wider than one tape line (crossing merged in) is narrowed to
+//     the kLineWidthSensors sensors nearest our line,
+//   * the hard edge pivot only fires when our line is truly at the edge
+//     (only group, center sensors off), not when a crossing hits an outer
+//     sensor,
+//   * if the line then ends (a corner), the lost-line turn goes toward the
+//     branch seen in the last kBranchMemoryMs.
+// false = original LF-2 behavior (outer sensor sees tape -> pivot).
+constexpr bool kCrossingHandling = true;
+// Sensors one tape line covers when centered. Check the on=[...] pattern in
+// calibration test mode with the robot on a straight line.
+constexpr int kLineWidthSensors = 2;
+constexpr uint32_t kBranchMemoryMs = 600;
+
 // Sensor positions, robot's left to right, in sensor spacings from center.
 constexpr float kSensorPosition[kNumSensors] = {-2.5f, -1.5f, -0.5f,
                                                 0.5f,  1.5f,  2.5f};
 
 // ================================= State ===================================
-enum class Mode { kPid, kEdgeLeft, kEdgeRight, kLost, kDone };
+// kCrossing = PID on the tracked line while another line is under the sensors.
+enum class Mode { kPid, kCrossing, kEdgeLeft, kEdgeRight, kLost, kDone };
 
 struct SensorReading {
   uint16_t raw[kNumSensors];  // Discharge time, us, robot's left to right.
@@ -164,11 +184,15 @@ float g_previous_error = 0.0f;
 bool g_has_previous_error = false;
 float g_last_position = 0.0f;
 Mode g_mode = Mode::kPid;
+int g_branch_side = 0;          // -1/+1: side of the last branch seen.
+uint32_t g_branch_seen_ms = 0;  // When it was seen (0 = never).
 
 const char* ModeName(Mode mode) {
   switch (mode) {
     case Mode::kPid:
       return "PID";
+    case Mode::kCrossing:
+      return "CROSS";
     case Mode::kEdgeLeft:
       return "EDGE_L";
     case Mode::kEdgeRight:
@@ -427,23 +451,32 @@ void PrintConfig() {
   Serial.printf("[LF] base=%d min=%d period=%lums auton=%lums\n", kBaseSpeed,
                 kMinSpeed, static_cast<unsigned long>(kControlPeriodMs),
                 static_cast<unsigned long>(kAutonDurationMs));
+  Serial.printf("[LF] crossing handling=%s line_width=%d branch_memory=%lums\n",
+                kCrossingHandling ? "ON" : "OFF (LF-2 edge pivots)",
+                kLineWidthSensors,
+                static_cast<unsigned long>(kBranchMemoryMs));
   Serial.println("[LF] Status line: t, dt (time since last PID step), read "
-                 "(sensor read time), mode, n (0=floor 1=line, left->right), "
-                 "pos (<0 = line on left), gains, P/I/D terms, corr, speeds");
+                 "(sensor read time), mode (CROSS = another line under the "
+                 "sensors), n (0=floor 1=line, left->right), pos (tracked "
+                 "line, <0 = left), avg (all sensors), groups, branch "
+                 "(side of other line), gains, P/I/D, corr, speeds");
 }
 
+// `pos` is the position used for steering (the tracked line); `avg` is the
+// plain average of all sensors, which differs when a crossing is present.
 void PrintStatus(uint32_t now_ms, float dt_ms, const SensorReading& reading,
-                 const PidTerms& pid, int speed, int left, int right) {
+                 float pos, int groups, int branch_side, const PidTerms& pid,
+                 int speed, int left, int right) {
   Serial.printf(
       "[LF] t=%lu dt=%.1fms read=%.1fms mode=%-6s "
-      "n=[%.2f %.2f %.2f %.2f %.2f %.2f] pos=%+.2f "
-      "kp=%.1f ki=%.2f kd=%.2f P=%+.1f I=%+.1f D=%+.1f corr=%+.1f "
-      "spd=%d L=%d R=%d\n",
+      "n=[%.2f %.2f %.2f %.2f %.2f %.2f] pos=%+.2f avg=%+.2f groups=%d "
+      "branch=%+d kp=%.1f ki=%.2f kd=%.2f P=%+.1f I=%+.1f D=%+.1f "
+      "corr=%+.1f spd=%d L=%d R=%d\n",
       static_cast<unsigned long>(now_ms - g_auton_start_ms), dt_ms,
       reading.read_us / 1000.0f, ModeName(g_mode), reading.norm[0],
       reading.norm[1], reading.norm[2], reading.norm[3], reading.norm[4],
-      reading.norm[5], reading.position, pid.kp, pid.ki, pid.kd, pid.p, pid.i,
-      pid.d, pid.correction, speed, left, right);
+      reading.norm[5], pos, reading.position, groups, branch_side, pid.kp,
+      pid.ki, pid.kd, pid.p, pid.i, pid.d, pid.correction, speed, left, right);
 }
 
 void SetMode(Mode mode, uint32_t now_ms) {
@@ -453,9 +486,12 @@ void SetMode(Mode mode, uint32_t now_ms) {
                   static_cast<unsigned long>(now_ms - g_auton_start_ms),
                   ModeName(g_mode), ModeName(mode), g_last_position);
   }
-  // Leaving PID: forget the old error and integral so D does not spike and
-  // I does not push the old way when PID resumes.
-  if (g_mode == Mode::kPid) ResetPid();
+  // Leaving PID steering: forget the old error and integral so D does not
+  // spike and I does not push the old way when PID resumes. PID <-> CROSS
+  // keeps them: both steer on the same tracked line.
+  const bool was_pid = g_mode == Mode::kPid || g_mode == Mode::kCrossing;
+  const bool is_pid = mode == Mode::kPid || mode == Mode::kCrossing;
+  if (was_pid && !is_pid) ResetPid();
   g_mode = mode;
 }
 
@@ -531,23 +567,48 @@ void ControlStep(uint32_t now_ms) {
   int speed = 0;
   int left = 0;
   int right = 0;
-  const bool outer_left = reading.on_line[0];
-  const bool outer_right = reading.on_line[kNumSensors - 1];
 
-  if (outer_left && !outer_right) {
-    // Like LF-2: only the far-left sensor side sees the line -> hard left.
+  // Decide what we see: our line's position, whether a crossing is under the
+  // sensors, and whether our line is truly at an edge.
+  bool line_visible = reading.line_visible;
+  float line_position = reading.position;
+  bool crossing = false;
+  bool edge_left = false;
+  bool edge_right = false;
+  line_tracking::Result track;
+  if (kCrossingHandling) {
+    track = line_tracking::Track(reading.norm, kOnLineThreshold, kNoiseFloor,
+                                 kLostLineSum, g_last_position,
+                                 kLineWidthSensors);
+    line_visible = track.visible;
+    line_position = track.position;
+    crossing = track.groups >= 2 || track.narrowed;
+    edge_left = track.at_left_edge;
+    edge_right = track.at_right_edge;
+    if (track.branch_side != 0) {
+      g_branch_side = track.branch_side;
+      g_branch_seen_ms = now_ms;
+    }
+  } else {
+    // Original LF-2 rule: an outer sensor alone on tape -> pivot that way.
+    edge_left = reading.on_line[0] && !reading.on_line[kNumSensors - 1];
+    edge_right = reading.on_line[kNumSensors - 1] && !reading.on_line[0];
+  }
+
+  if (edge_left) {
+    // Only the far-left side sees the line -> hard left (like LF-2).
     SetMode(Mode::kEdgeLeft, now_ms);
     left = 0;
     right = kEdgeTurnSpeed;
     g_last_position = kSensorPosition[0];
-  } else if (outer_right && !outer_left) {
+  } else if (edge_right) {
     SetMode(Mode::kEdgeRight, now_ms);
     left = kEdgeTurnSpeed;
     right = 0;
     g_last_position = kSensorPosition[kNumSensors - 1];
-  } else if (reading.line_visible) {
-    SetMode(Mode::kPid, now_ms);
-    const float error = reading.position;  // Target is 0 (centered).
+  } else if (line_visible) {
+    SetMode(crossing ? Mode::kCrossing : Mode::kPid, now_ms);
+    const float error = line_position;  // Target is 0 (centered).
 
     if (kUseAutoGain) {
       // LF-2: Kp = 0.0006 * (1000 - center). Same idea on normalized values:
@@ -582,11 +643,16 @@ void ControlStep(uint32_t now_ms) {
     // Like LF-2, wheels never reverse while following.
     left = constrain(static_cast<int>(speed + pid.correction), 0, 100);
     right = constrain(static_cast<int>(speed - pid.correction), 0, 100);
-    g_last_position = reading.position;
+    g_last_position = line_position;
   } else {
-    // Line lost: pivot toward the side it was last seen on.
+    // Line lost: pivot toward a branch seen just before (our line ended at a
+    // corner), otherwise toward the side the line was last seen on.
     SetMode(Mode::kLost, now_ms);
-    if (g_last_position < 0.0f) {
+    const bool recent_branch = kCrossingHandling && g_branch_seen_ms != 0 &&
+                               now_ms - g_branch_seen_ms < kBranchMemoryMs;
+    const bool turn_left =
+        recent_branch ? g_branch_side < 0 : g_last_position < 0.0f;
+    if (turn_left) {
       left = -kLostTurnSpeed;
       right = kLostTurnSpeed;
     } else {
@@ -599,7 +665,10 @@ void ControlStep(uint32_t now_ms) {
 
   if (kDebugPrint && now_ms - g_last_print_ms >= kDebugPrintPeriodMs) {
     g_last_print_ms = now_ms;
-    PrintStatus(now_ms, dt_s * 1000.0f, reading, pid, speed, left, right);
+    const int groups = kCrossingHandling ? track.groups : -1;
+    const int branch = kCrossingHandling ? track.branch_side : 0;
+    PrintStatus(now_ms, dt_s * 1000.0f, reading, line_position, groups,
+                branch, pid, speed, left, right);
   }
 }
 
@@ -647,6 +716,8 @@ bool FollowFor(uint32_t duration_ms, bool (*should_abort)()) {
   ResetPid();
   g_mode = Mode::kPid;
   g_last_position = 0.0f;
+  g_branch_side = 0;
+  g_branch_seen_ms = 0;
   g_auton_start_ms = millis();
   g_last_step_ms = 0;
   g_last_print_ms = 0;
