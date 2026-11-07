@@ -67,9 +67,10 @@ constexpr uint32_t kHandCalibrationMs = 10000;
 // from the calibration test output on the real field.
 constexpr bool kCalibrateAtStart = true;
 constexpr int kNumSensors = 6;
-constexpr uint16_t kSavedMin[kNumSensors] = {100, 100, 100, 100, 100, 100};
-constexpr uint16_t kSavedMax[kNumSensors] = {2000, 2000, 2000, 2000, 2000,
-                                             2000};
+// From a hand calibration on the robot (Nov 7). Recalibrate on the real field.
+constexpr uint16_t kSavedMin[kNumSensors] = {966, 1036, 884, 907, 926, 886};
+constexpr uint16_t kSavedMax[kNumSensors] = {2847, 2865, 2385,
+                                             2484, 2760, 3212};
 
 // Calibration motion:
 //   true  = FULL ROTATION: spin in place like LF-2. Every sensor passes over
