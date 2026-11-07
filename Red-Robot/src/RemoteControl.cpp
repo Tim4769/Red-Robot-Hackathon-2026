@@ -4,8 +4,10 @@
 
 // Club controller (RR_Controller) layout:
 //   Left stick   drive (arcade)      Right stick  claw up/down (Y only)
-//   X  start driver control          Y  delayed line run (press again
-//                                       to cancel), see "Y routine"
+//   X  line run + turn (test 9)      Y  delayed line run
+//      Either one: switches to driver control, runs its routine, then
+//      the sticks take over. X or Y again = cancel (-> driver now).
+//      Press X twice for driver control without a routine.
 //   A  rotate claw (toggle)          B  open / close claw (toggle)
 //   D-pad  nothing (driving removed)
 
@@ -23,11 +25,24 @@ constexpr bool kInvertRight = false;
 constexpr int kJoystickDrivePercent = 80;  // Forward/back (stick Y).
 constexpr int kJoystickTurnPercent = 40;   // Left/right (stick X). Was 50.
 
-// ============================== Y routine ==================================
-// Y (after X): wait kYStartDelayMs, drive straight kYForwardMs, then follow
-// the line and STOP when it ends (like console test 9 without the
-// back/turn/forward). Press Y again to cancel. Drive stick and D-pad are
-// ignored while it runs; the claw still works.
+// =============================== Routines ==================================
+// Drive stick is ignored while a routine runs; the claw still works.
+//
+// X: same as console test 9 (keep in sync with src/drive_test.cpp):
+// forward, follow the line, and when it ends: back up, turn right ~120 deg,
+// forward, stop.
+constexpr int kXStartForwardSpeed = 40;
+constexpr uint32_t kXStartForwardMs = 1000;
+constexpr uint32_t kXFollowTimeoutMs = 20000;  // Stop if it never ends.
+constexpr int kXBackSpeed = 40;
+constexpr uint32_t kXBackMs = 500;
+constexpr int kXTurnSpeed = 35;
+constexpr uint32_t kXTurnMs = 890;             // ~120 deg (timed).
+constexpr int kXForwardSpeed = 40;
+constexpr uint32_t kXForwardMs = 1000;
+//
+// Y: wait kYStartDelayMs, drive straight kYForwardMs, then follow the line
+// and STOP when it ends.
 constexpr uint32_t kYStartDelayMs = 5000;
 constexpr int kYForwardSpeed = 40;
 constexpr uint32_t kYForwardMs = 1000;
@@ -72,8 +87,10 @@ bool g_rotated = false;       // Assume it starts at kRotateAngleA.
 int g_lift_servo_angle = 90;  // Servo mode: current lift angle.
 volatile int g_lift_stick = 0;  // Latest right-stick Y (deadzoned, signed).
 bool g_lift_task_started = false;
-volatile bool g_routine_running = false;  // Y routine active.
-volatile bool g_routine_cancel = false;   // Y pressed again: stop it.
+enum class Routine { kLineEndTurn, kDelayedLineRun };  // X, Y.
+volatile bool g_routine_running = false;  // A routine is active.
+volatile bool g_routine_cancel = false;   // X/Y pressed again: stop it.
+Routine g_routine = Routine::kLineEndTurn;
 
 void DriveLeft(int speed) {
   speed = constrain(speed, -100, 100);
@@ -121,35 +138,95 @@ bool RoutineWait(uint32_t ms) {
   return true;
 }
 
-// Runs in its own task so the Bluetooth callbacks stay responsive.
-void YRoutineTask(void*) {
-  Serial.printf("[RC] Y routine: waiting %lu ms (press Y again to "
-                "cancel)\n",
-                static_cast<unsigned long>(kYStartDelayMs));
-  bool ok = RoutineWait(kYStartDelayMs);
-  if (ok) {
-    Serial.printf("[RC] Y routine: forward %d%% for %lu ms\n",
-                  kYForwardSpeed, static_cast<unsigned long>(kYForwardMs));
-    DriveLeft(kYForwardSpeed);
-    DriveRight(kYForwardSpeed);
-    ok = RoutineWait(kYForwardMs);
-    DriveLeft(0);
-    DriveRight(0);
+// Drives both wheels for `ms` (or until cancelled), then stops them.
+// Returns false if cancelled.
+bool RoutineDrive(int left, int right, uint32_t ms) {
+  DriveLeft(left);
+  DriveRight(right);
+  const bool ok = RoutineWait(ms);
+  DriveLeft(0);
+  DriveRight(0);
+  return ok;
+}
+
+// X: forward, follow, and at the line end: back, turn right, forward.
+void RunLineEndTurn() {
+  Serial.printf("[RC] X: forward %lu ms\n",
+                static_cast<unsigned long>(kXStartForwardMs));
+  if (!RoutineDrive(kXStartForwardSpeed, kXStartForwardSpeed,
+                    kXStartForwardMs)) {
+    return;
   }
-  if (ok) {
-    Serial.println("[RC] Y routine: following the line");
-    // Prints LINE ENDED / did NOT end, and stops the motors itself.
-    line_follower::FollowUntilLineEnds(0, kYFollowTimeoutMs,
-                                       &RoutineCancelled);
+  Serial.println("[RC] X: following the line");
+  if (!line_follower::FollowUntilLineEnds(0, kXFollowTimeoutMs,
+                                          &RoutineCancelled)) {
+    return;  // Timed out or cancelled; it printed why.
+  }
+  Serial.printf("[RC] X: back %lu ms\n", static_cast<unsigned long>(kXBackMs));
+  if (!RoutineDrive(-kXBackSpeed, -kXBackSpeed, kXBackMs)) return;
+  Serial.printf("[RC] X: turn right %lu ms (~120 deg)\n",
+                static_cast<unsigned long>(kXTurnMs));
+  if (!RoutineDrive(kXTurnSpeed, -kXTurnSpeed, kXTurnMs)) return;
+  Serial.printf("[RC] X: forward %lu ms\n",
+                static_cast<unsigned long>(kXForwardMs));
+  RoutineDrive(kXForwardSpeed, kXForwardSpeed, kXForwardMs);
+}
+
+// Y: wait, forward, follow, stop at the line end.
+void RunDelayedLineRun() {
+  Serial.printf("[RC] Y: waiting %lu ms\n",
+                static_cast<unsigned long>(kYStartDelayMs));
+  if (!RoutineWait(kYStartDelayMs)) return;
+  Serial.printf("[RC] Y: forward %lu ms\n",
+                static_cast<unsigned long>(kYForwardMs));
+  if (!RoutineDrive(kYForwardSpeed, kYForwardSpeed, kYForwardMs)) return;
+  Serial.println("[RC] Y: following the line");
+  // Prints LINE ENDED / did NOT end, and stops the motors itself.
+  line_follower::FollowUntilLineEnds(0, kYFollowTimeoutMs, &RoutineCancelled);
+}
+
+// Runs in its own task so the Bluetooth callbacks stay responsive. Driver
+// control is already on (set when the routine started), so the sticks take
+// over as soon as g_routine_running goes false.
+void RoutineTask(void*) {
+  const char* name = g_routine == Routine::kLineEndTurn ? "X" : "Y";
+  if (g_routine == Routine::kLineEndTurn) {
+    RunLineEndTurn();
+  } else {
+    RunDelayedLineRun();
   }
   DriveLeft(0);
   DriveRight(0);
-  Serial.println(g_routine_cancel
-                     ? "[RC] Y routine: CANCELLED, motors stopped"
-                     : "[RC] Y routine: finished, motors stopped");
+  Serial.printf("[RC] %s routine %s. Driver control: sticks active.\n", name,
+                g_routine_cancel ? "CANCELLED" : "finished");
   g_routine_cancel = false;
   g_routine_running = false;
   vTaskDelete(nullptr);
+}
+
+// X/Y pressed: cancel a running routine, or switch to driver control and
+// start `routine`.
+void StartOrCancelRoutine(Routine routine, const char* button) {
+  if (g_routine_running) {
+    g_routine_cancel = true;
+    Serial.printf("[RC] %s: cancelling the routine\n", button);
+    return;
+  }
+  if (!RedRobot::IsRemoteControlled()) {
+    RedRobot::StartRemoteControl();  // Stops the autonomous loop's driving.
+  }
+  DriveLeft(0);
+  DriveRight(0);
+  g_routine = routine;
+  g_routine_cancel = false;
+  g_routine_running = true;
+  Serial.printf("[RC] %s: routine started (press X or Y again to cancel)\n",
+                button);
+  if (xTaskCreate(RoutineTask, "routine", 8192, nullptr, 1, nullptr) !=
+      pdPASS) {
+    g_routine_running = false;
+    Serial.printf("[RC] %s: could not start the routine task\n", button);
+  }
 }
 }  // namespace
 
@@ -248,7 +325,7 @@ namespace RR_Controller
   // Left stick: arcade drive.
   void Joystick1(int8_t x, int8_t y)
   {
-    if (g_routine_running) return;  // Y routine is driving.
+    if (g_routine_running) return;  // A routine is driving.
     const int drive = y * kJoystickDrivePercent / 100;
     const int turn = x * kJoystickTurnPercent / 100;  // Less twitchy turns.
     int leftMotor = drive + turn;
@@ -296,41 +373,17 @@ namespace RR_Controller
     (void)buttonPressedDown;
   }
 
+  // X: line run + turn (console test 9), or cancel a running routine.
   void ButtonX_Pressed(bool buttonPressedDown)
   {
-    if (!RedRobot::IsRemoteControlled() && buttonPressedDown)
-    {
-      RedRobot::StartRemoteControl();
-
-      // start remote controlled with the DC motors off
-      DriveLeft(0);
-      DriveRight(0);
-    }
+    if (buttonPressedDown) StartOrCancelRoutine(Routine::kLineEndTurn, "X");
   }
 
-  // Y: start the delayed line run, or cancel it if it's running.
+  // Y: delayed line run, or cancel a running routine.
   void ButtonY_Pressed(bool buttonPressedDown)
   {
-    if (!buttonPressedDown) return;
-    if (g_routine_running)
-    {
-      g_routine_cancel = true;
-      Serial.println("[RC] Y: cancelling the routine");
-      return;
-    }
-    if (!RedRobot::IsRemoteControlled())
-    {
-      Serial.println("[RC] Y: press X first (driver control)");
-      return;
-    }
-    g_routine_cancel = false;
-    g_routine_running = true;
-    if (xTaskCreate(YRoutineTask, "yRoutine", 8192, nullptr, 1, nullptr) !=
-        pdPASS)
-    {
-      g_routine_running = false;
-      Serial.println("[RC] Y: could not start the routine task");
-    }
+    if (buttonPressedDown)
+      StartOrCancelRoutine(Routine::kDelayedLineRun, "Y");
   }
 
   // B: open / close the claw.
