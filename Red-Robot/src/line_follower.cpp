@@ -155,6 +155,17 @@ constexpr bool kSearchForLine = true;
 constexpr int kSearchSpeed = 30;
 constexpr uint32_t kSearchTimeoutMs = 5000;
 
+// SWEEP (FollowUntilLineEnds with find_line_first, used by controller Y):
+// pivot left/right in place, each swing wider, until a sensor sees the line.
+// Swing sizes are in ms of pivoting (~7.4 ms per degree at 35% on this
+// robot): first swing ~35 deg each side, growing ~35 deg per swing, max
+// ~120 deg each side.
+constexpr int kSweepSpeed = 35;
+constexpr uint32_t kSweepFirstMs = 260;
+constexpr uint32_t kSweepGrowMs = 260;
+constexpr uint32_t kSweepMaxMs = 890;
+constexpr uint32_t kSweepTimeoutMs = 6000;
+
 // ACQUIRE (kAcquireAtAngle): once the line is found, line up with it before
 // PID, so a steep approach angle doesn't make it overshoot or turn the long
 // way (the LF-2 edge rule would pivot toward the side the line touched
@@ -999,7 +1010,7 @@ int LastOnLineCount() { return g_last_on_line_count; }
 bool IsCalibrationTestMode() { return kCalibrationTestMode; }
 
 bool FollowUntilLineEnds(uint32_t arm_ms, uint32_t timeout_ms,
-                         bool (*should_abort)()) {
+                         bool (*should_abort)(), bool find_line_first) {
   if (!g_calibrated) {
     for (int i = 0; i < kNumSensors; ++i) {
       g_min[i] = kSavedMin[i];
@@ -1007,6 +1018,64 @@ bool FollowUntilLineEnds(uint32_t arm_ms, uint32_t timeout_ms,
     }
     g_calibrated = true;
     Serial.println("[LF] Not calibrated yet: using kSavedMin / kSavedMax.");
+  }
+  if (find_line_first) {
+    // Sweep left/right in place, each swing wider, until a sensor sees the
+    // line, so a robot that isn't on the line yet doesn't count as "line
+    // ended" on the first step. `heading` = estimated turn from the start,
+    // in ms of pivoting (+ = left).
+    Serial.printf("[LF] Sweeping for the line: %d%%, first swing %lu ms, max "
+                  "%lu ms each side, give up after %lu ms\n",
+                  kSweepSpeed, static_cast<unsigned long>(kSweepFirstMs),
+                  static_cast<unsigned long>(kSweepMaxMs),
+                  static_cast<unsigned long>(kSweepTimeoutMs));
+    const uint32_t search_start = millis();
+    uint32_t last_ms = search_start;
+    long heading = 0;
+    long amplitude = kSweepFirstMs;
+    int dir = 1;  // +1 = turning left, -1 = turning right.
+    long target = amplitude;
+    bool found = false;
+    while (millis() - search_start < kSweepTimeoutMs) {
+      if (should_abort != nullptr && should_abort()) {
+        SetDrive(0, 0);
+        return false;
+      }
+      SensorReading reading;
+      ReadSensors(&reading);
+      if (reading.line_visible) {
+        found = true;
+        SetDrive(0, 0);
+        Serial.printf("[LF] Line found after %lu ms of sweeping (max=%.2f, "
+                      "pos %+.2f)\n",
+                      static_cast<unsigned long>(millis() - search_start),
+                      reading.max_norm, reading.position);
+        break;
+      }
+      const uint32_t now = millis();
+      heading += dir * static_cast<long>(now - last_ms);
+      last_ms = now;
+      if ((dir > 0 && heading >= target) || (dir < 0 && heading <= target)) {
+        amplitude = min(amplitude + static_cast<long>(kSweepGrowMs),
+                        static_cast<long>(kSweepMaxMs));
+        dir = -dir;
+        target = dir * amplitude;
+        if (kDebugPrint) {
+          Serial.printf("[LF]   sweep: now turning %s (swing %ld ms)\n",
+                        dir > 0 ? "LEFT" : "RIGHT", amplitude);
+        }
+      }
+      // Pivot in place: left = left wheel back, right wheel forward.
+      SetDrive(dir > 0 ? -kSweepSpeed : kSweepSpeed,
+               dir > 0 ? kSweepSpeed : -kSweepSpeed);
+    }
+    if (!found) {
+      SetDrive(0, 0);
+      Serial.printf("[LF] No line found within %lu ms of sweeping. Motors "
+                    "stopped.\n",
+                    static_cast<unsigned long>(kSweepTimeoutMs));
+      return false;
+    }
   }
   Serial.printf("[LF] Following until the line ends (checking after %lu ms, "
                 "timeout %lu ms): Kp=%.2f Kd=%.3f base=%d\n",

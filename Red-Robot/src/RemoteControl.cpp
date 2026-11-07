@@ -175,7 +175,8 @@ void RunLineEndTurn() {
   RoutineDrive(kXForwardSpeed, kXForwardSpeed, kXForwardMs);
 }
 
-// Y: wait, forward, follow, stop at the line end.
+// Y: wait, forward, sweep left/right until the line is found, follow, stop
+// at the line end.
 void RunDelayedLineRun() {
   Serial.printf("[RC] Y: waiting %lu ms\n",
                 static_cast<unsigned long>(kYStartDelayMs));
@@ -183,9 +184,11 @@ void RunDelayedLineRun() {
   Serial.printf("[RC] Y: forward %lu ms\n",
                 static_cast<unsigned long>(kYForwardMs));
   if (!RoutineDrive(kYForwardSpeed, kYForwardSpeed, kYForwardMs)) return;
-  Serial.println("[RC] Y: following the line");
+  Serial.println("[RC] Y: sweeping for the line, then following it");
+  // find_line_first = true: sweeps left/right until a sensor sees the line.
   // Prints LINE ENDED / did NOT end, and stops the motors itself.
-  line_follower::FollowUntilLineEnds(0, kYFollowTimeoutMs, &RoutineCancelled);
+  line_follower::FollowUntilLineEnds(0, kYFollowTimeoutMs, &RoutineCancelled,
+                                     /*find_line_first=*/true);
 }
 
 // Runs in its own task so the Bluetooth callbacks stay responsive. Driver

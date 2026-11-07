@@ -53,8 +53,12 @@ bool FollowFor(uint32_t duration_ms, bool (*should_abort)());
 // until it ends: once `arm_ms` has passed, the first step where the line is
 // lost stops the motors and returns true. Returns false on timeout
 // (`timeout_ms`) or abort. Uses kSavedMin/kSavedMax if not calibrated.
+// `find_line_first` = true: first sweep left/right in place, each swing
+// wider, until a sensor sees the line (gives up after kSweepTimeoutMs and
+// returns false), so "line ended" can only happen after the robot has
+// actually been on it.
 bool FollowUntilLineEnds(uint32_t arm_ms, uint32_t timeout_ms,
-                         bool (*should_abort)());
+                         bool (*should_abort)(), bool find_line_first = false);
 
 }  // namespace line_follower
 
