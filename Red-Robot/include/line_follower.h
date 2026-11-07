@@ -49,6 +49,13 @@ void CalibrateNow();
 // full duration. Uses kSavedMin/kSavedMax if CalibrateNow() hasn't run.
 bool FollowFor(uint32_t duration_ms, bool (*should_abort)());
 
+// Follows the line (starting straight in PID: put the robot ON the line)
+// until it ends: once `arm_ms` has passed, the first step where the line is
+// lost stops the motors and returns true. Returns false on timeout
+// (`timeout_ms`) or abort. Uses kSavedMin/kSavedMax if not calibrated.
+bool FollowUntilLineEnds(uint32_t arm_ms, uint32_t timeout_ms,
+                         bool (*should_abort)());
+
 }  // namespace line_follower
 
 #endif  // RED_ROBOT_LINE_FOLLOWER_H_

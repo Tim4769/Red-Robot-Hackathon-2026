@@ -998,4 +998,54 @@ int LastOnLineCount() { return g_last_on_line_count; }
 
 bool IsCalibrationTestMode() { return kCalibrationTestMode; }
 
+bool FollowUntilLineEnds(uint32_t arm_ms, uint32_t timeout_ms,
+                         bool (*should_abort)()) {
+  if (!g_calibrated) {
+    for (int i = 0; i < kNumSensors; ++i) {
+      g_min[i] = kSavedMin[i];
+      g_max[i] = kSavedMax[i];
+    }
+    g_calibrated = true;
+    Serial.println("[LF] Not calibrated yet: using kSavedMin / kSavedMax.");
+  }
+  Serial.printf("[LF] Following until the line ends (checking after %lu ms, "
+                "timeout %lu ms): Kp=%.2f Kd=%.3f base=%d\n",
+                static_cast<unsigned long>(arm_ms),
+                static_cast<unsigned long>(timeout_ms), kKp, kKd, kBaseSpeed);
+  ResetPid();
+  g_mode = Mode::kPid;  // No line finder: the robot starts on the line.
+  g_last_position = 0.0f;
+  g_bend_side = 0;
+  g_bend_seen_ms = 0;
+  g_auton_start_ms = millis();
+  g_last_step_ms = 0;
+  g_last_print_ms = 0;
+  g_last_pid_us = micros();
+
+  while (millis() - g_auton_start_ms < timeout_ms) {
+    if (should_abort != nullptr && should_abort()) {
+      SetDrive(0, 0);
+      return false;
+    }
+    const uint32_t now_ms = millis();
+    if (now_ms - g_last_step_ms >= kControlPeriodMs) {
+      g_last_step_ms = now_ms;
+      ControlStep(now_ms);
+      const uint32_t elapsed = now_ms - g_auton_start_ms;
+      if (elapsed >= arm_ms && g_mode == Mode::kLost) {
+        SetDrive(0, 0);
+        Serial.printf("[LF] LINE ENDED at t=%lu ms (last pos %+.2f). Motors "
+                      "stopped.\n",
+                      static_cast<unsigned long>(elapsed), g_last_position);
+        return true;
+      }
+    }
+    delay(1);
+  }
+  SetDrive(0, 0);
+  Serial.printf("[LF] Line did NOT end within %lu ms. Motors stopped.\n",
+                static_cast<unsigned long>(timeout_ms));
+  return false;
+}
+
 }  // namespace line_follower

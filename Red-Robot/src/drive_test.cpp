@@ -27,6 +27,21 @@ constexpr bool kInvertRight = false;
 constexpr uint32_t kCountdownMs = 3000;  // Before any test that drives.
 constexpr uint32_t kStressMarker = 0x5752E55A;
 
+// ===================== Test 9: line end -> back, turn ======================
+// Follow the line; after kLineEndArmMs, when the line ends: back up, turn
+// RIGHT ~120 degrees, drive forward, stop.
+constexpr uint32_t kLineEndArmMs = 3000;      // Only check for the end after.
+constexpr uint32_t kLineEndTimeoutMs = 20000;  // Give up if it never ends.
+constexpr int kBackSpeed = 40;
+constexpr uint32_t kBackMs = 500;
+constexpr int kTurnSpeed = 35;
+// No encoder/gyro: 120 degrees is TIMED. Default = 1/3 of a full turn using
+// the 2000 ms-per-turn-at-35% guess. Measure with test 4 (spin) and adjust,
+// or pass it: "9 700" = 700 ms turn.
+constexpr uint32_t kTurn120Ms = 667;
+constexpr int kForwardSpeed = 40;
+constexpr uint32_t kForwardMs = 1000;         // Or pass it: "9 700 1200".
+
 // Survives a reset (not a power cycle): set while the stress test runs, so a
 // brownout reset mid-test can be reported after the reboot.
 RTC_NOINIT_ATTR uint32_t g_stress_marker;
@@ -290,6 +305,33 @@ void RunFollow(int seconds, int) {
                            &ShouldAbort);
 }
 
+void RunLineEnd(int turn_ms, int forward_ms) {
+  const uint32_t turn = turn_ms > 0 ? turn_ms : kTurn120Ms;
+  const uint32_t forward = forward_ms > 0 ? forward_ms : kForwardMs;
+  Serial.printf("[DT] Line end: follow; after %lu ms, when the line ends: "
+                "back %d%% %lu ms, turn RIGHT %d%% %lu ms (~120 deg), "
+                "forward %d%% %lu ms, stop.\n",
+                static_cast<unsigned long>(kLineEndArmMs), kBackSpeed,
+                static_cast<unsigned long>(kBackMs), kTurnSpeed,
+                static_cast<unsigned long>(turn), kForwardSpeed,
+                static_cast<unsigned long>(forward));
+  if (!Countdown()) return;
+  if (!line_follower::FollowUntilLineEnds(kLineEndArmMs, kLineEndTimeoutMs,
+                                          &ShouldAbort)) {
+    return;  // Timed out or aborted; it already printed why.
+  }
+  Serial.printf("[DT]   1/3 back %lu ms\n", static_cast<unsigned long>(kBackMs));
+  if (!DriveFor(-kBackSpeed, -kBackSpeed, kBackMs)) return;
+  Serial.printf("[DT]   2/3 turn right %lu ms\n",
+                static_cast<unsigned long>(turn));
+  if (!DriveFor(kTurnSpeed, -kTurnSpeed, turn)) return;
+  Serial.printf("[DT]   3/3 forward %lu ms\n",
+                static_cast<unsigned long>(forward));
+  if (!DriveFor(kForwardSpeed, kForwardSpeed, forward)) return;
+  Serial.println("[DT] Done. If the turn wasn't 120 deg, rerun with a "
+                 "different turn time, e.g. '9 750'.");
+}
+
 // ============================== Menu =======================================
 
 struct DriveTest {
@@ -347,6 +389,12 @@ constexpr DriveTest kTests[] = {
      "Follows the line for 10 s at base speed 45% using PID, printing a "
      "status line every 0.1 s. Any key stops it.",
      RunFollow},
+    {"lineend", "[turn_ms fwd_ms]", "Follow; at line end: back, right 120, fwd",
+     "PLACE THE ROBOT ON THE LINE (centered, facing along it), with the end "
+     "of the line ahead and ~50 cm clear to the right.",
+     "Follows the line. After 3 s, when the line ends: back 0.5 s, turn "
+     "RIGHT ~120 deg (timed), forward 1 s, stop. Any key stops it.",
+     RunLineEnd},
 };
 constexpr int kNumTests = sizeof(kTests) / sizeof(kTests[0]);
 
