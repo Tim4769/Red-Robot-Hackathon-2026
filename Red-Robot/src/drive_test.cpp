@@ -32,7 +32,7 @@ constexpr uint32_t kStressMarker = 0x5752E55A;
 // after kLineEndArmMs of following, when the line ends: back up, turn
 // RIGHT ~120 degrees, drive forward, stop.
 constexpr int kStartForwardSpeed = 40;
-constexpr uint32_t kStartForwardMs = 2000;
+constexpr uint32_t kStartForwardMs = 1500;
 constexpr uint32_t kLineEndArmMs = 3000;      // Only check for the end after.
 constexpr uint32_t kLineEndTimeoutMs = 20000;  // Give up if it never ends.
 constexpr int kBackSpeed = 40;
@@ -401,7 +401,7 @@ constexpr DriveTest kTests[] = {
     {"lineend", "[turn_ms fwd_ms]", "Follow; at line end: back, right 120, fwd",
      "PLACE THE ROBOT ON THE LINE (centered, facing along it), with the end "
      "of the line ahead and ~50 cm clear to the right.",
-     "Drives straight forward 2 s, then follows the line. After 3 s of "
+     "Drives straight forward 1.5 s, then follows the line. After 3 s of "
      "following, when the line ends: back 0.5 s, turn RIGHT ~120 deg "
      "(timed), forward 1 s, stop. Any key stops it.",
      RunLineEnd},
