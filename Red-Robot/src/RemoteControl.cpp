@@ -7,6 +7,7 @@
 //   X  start driver control          Y  delayed line run (press again
 //                                       to cancel), see "Y routine"
 //   A  rotate claw (toggle)          B  open / close claw (toggle)
+//   D-pad  nothing (driving removed)
 
 // Drive wiring (matches src/line_follower.cpp and the drive test):
 // motor port 0 = left wheel, wired backward so it is inverted here;
@@ -42,15 +43,17 @@ constexpr uint32_t kYFollowTimeoutMs = 15000;  // Stop if the line never ends.
 //   kLiftUsesMotor = true:  DC motor kLiftMotor runs at the stick's speed,
 //                           stick released = stop. (Port 3 is the only free
 //                           DC motor port: 0/2 drive, 1 is disabled.)
-//   kLiftUsesMotor = false: servo kLiftServo moves kLiftServoStep degrees per
-//                           stick update while pushed, and stays put.
+//   kLiftUsesMotor = false: servo kLiftServo moves SMOOTHLY while the stick
+//                           is pushed (a 20 ms loop; speed ~ how far it's
+//                           pushed, up to kLiftDegPerSec) and stays put.
 constexpr bool kLiftUsesMotor = false;  // Up/down is a servo (J7).
 constexpr uint8_t kLiftMotor = 3;
 constexpr bool kInvertLift = false;    // Flip if stick-up moves it down.
 constexpr int kLiftPercent = 60;       // Max lift speed, % of the stick.
 constexpr int kStickDeadzone = 15;     // Ignore small stick wobble.
 constexpr uint8_t kLiftServo = 3;      // J7.
-constexpr int kLiftServoStep = 3;      // Degrees per update (servo mode).
+constexpr float kLiftDegPerSec = 150.0f;  // Servo speed at full stick.
+constexpr uint32_t kLiftUpdateMs = 20;    // Servo update period.
 constexpr int kLiftServoMin = 0;
 constexpr int kLiftServoMax = 180;
 
@@ -67,6 +70,8 @@ constexpr int kRotateAngleB = 90;
 bool g_claw_closed = false;   // Assume it starts open.
 bool g_rotated = false;       // Assume it starts at kRotateAngleA.
 int g_lift_servo_angle = 90;  // Servo mode: current lift angle.
+volatile int g_lift_stick = 0;  // Latest right-stick Y (deadzoned, signed).
+bool g_lift_task_started = false;
 volatile bool g_routine_running = false;  // Y routine active.
 volatile bool g_routine_cancel = false;   // Y pressed again: stop it.
 
@@ -78,6 +83,30 @@ void DriveLeft(int speed) {
 void DriveRight(int speed) {
   speed = constrain(speed, -100, 100);
   RedRobot::WriteDCMotor(kRightMotor, kInvertRight ? -speed : speed);
+}
+
+// Servo-mode lift: every kLiftUpdateMs, move the servo at a speed
+// proportional to the latest stick value, so motion is smooth no matter
+// how irregularly the controller sends stick updates.
+void LiftTask(void*) {
+  float angle = g_lift_servo_angle;
+  int written = -1;
+  const float dt = kLiftUpdateMs / 1000.0f;
+  while (true) {
+    const int stick = g_lift_stick;
+    if (stick != 0) {
+      angle += (stick / 100.0f) * kLiftDegPerSec * dt;
+      angle = constrain(angle, static_cast<float>(kLiftServoMin),
+                        static_cast<float>(kLiftServoMax));
+    }
+    const int rounded = static_cast<int>(angle + 0.5f);
+    if (stick != 0 && rounded != written) {
+      RedRobot::SetServo(kLiftServo, rounded);
+      written = rounded;
+      g_lift_servo_angle = rounded;
+    }
+    vTaskDelay(pdMS_TO_TICKS(kLiftUpdateMs));
+  }
 }
 
 bool RoutineCancelled() { return g_routine_cancel; }
@@ -248,61 +277,23 @@ namespace RR_Controller
       if (kInvertLift) speed = -speed;
       RedRobot::WriteDCMotor(kLiftMotor, constrain(speed, -100, 100));
     }
-    else if (stick != 0)
+    else
     {
-      const int step = (stick > 0) == !kInvertLift ? kLiftServoStep
-                                                   : -kLiftServoStep;
-      g_lift_servo_angle =
-          constrain(g_lift_servo_angle + step, kLiftServoMin, kLiftServoMax);
-      RedRobot::SetServo(kLiftServo, g_lift_servo_angle);
+      // Just record the stick; LiftTask moves the servo smoothly.
+      g_lift_stick = kInvertLift ? -stick : stick;
+      if (!g_lift_task_started)
+      {
+        g_lift_task_started = true;
+        xTaskCreate(LiftTask, "liftServo", 3072, nullptr, 1, nullptr);
+      }
     }
   }
 
-  /* DPad_Pressed is called everytime a D-Pad button is pressed or released.
-   *
-   * Only activates after RedRobot::StartRemoteControl() is called.
-   * Button is one of {UP = 0, DOWN = 1, LEFT = 2, RIGHT = 3, CENTER = 4}
-   */
+  // D-pad: no driving (removed at the team's request). Free for later use.
   void DPad_Pressed(button_t Button, bool buttonPressedDown)
   {
-    if (g_routine_running) return;  // Y routine is driving.
-
-    // values stay the same between calls to DPad_Pressed
-    static bool button_pressed[5] = {false, false, false, false, false};
-
-    button_pressed[Button] = (buttonPressedDown == true);
-
-    // TODO: edit your speed output to the yellow motors below!
-    // stop = 0, slow = 50, fast = 100
-    // range [-100,100]
-
-    int left_speed = 0;
-    int right_speed = 0;
-
-    if (button_pressed[UP])
-    { // Forward
-      left_speed += 100;
-      right_speed += 100;
-    }
-    if (button_pressed[DOWN])
-    { // Backward
-      left_speed -= 100;
-      right_speed -= 100;
-    }
-    if (button_pressed[LEFT])
-    { // Turn left_speed
-      left_speed -= 50;
-      right_speed += 50;
-    }
-    if (button_pressed[RIGHT])
-    { // Turn right_speed
-      left_speed += 50;
-      right_speed -= 50;
-    }
-
-    // Clamp and write speeds
-    DriveLeft(constrain(left_speed, -100, 100));
-    DriveRight(constrain(right_speed, -100, 100));
+    (void)Button;
+    (void)buttonPressedDown;
   }
 
   void ButtonX_Pressed(bool buttonPressedDown)
