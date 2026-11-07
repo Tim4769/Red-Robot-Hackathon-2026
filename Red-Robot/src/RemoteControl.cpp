@@ -48,9 +48,11 @@ constexpr uint32_t kXTurnMs = 890;             // ~120 deg (timed).
 constexpr int kXForwardSpeed = 40;
 constexpr uint32_t kXForwardMs = 1000;
 //
-// Y: wait kYStartDelayMs, then follow the line (no blind forward drive:
-// start the robot on the line) and STOP when it ends.
+// Y: wait kYStartDelayMs, drive straight kYForwardMs (so it can start off
+// the line), then follow the line and STOP when it ends.
 constexpr uint32_t kYStartDelayMs = 5000;
+constexpr int kYForwardSpeed = 40;
+constexpr uint32_t kYForwardMs = 1000;
 constexpr uint32_t kYFollowTimeoutMs = 15000;  // Stop if the line never ends.
 
 // ============================ Claw mechanism ===============================
@@ -173,11 +175,14 @@ void RunLineEndTurn() {
   RoutineDrive(kXForwardSpeed, kXForwardSpeed, kXForwardMs);
 }
 
-// Y: wait, follow, stop at the line end.
+// Y: wait, forward, follow, stop at the line end.
 void RunDelayedLineRun() {
   Serial.printf("[RC] Y: waiting %lu ms\n",
                 static_cast<unsigned long>(kYStartDelayMs));
   if (!RoutineWait(kYStartDelayMs)) return;
+  Serial.printf("[RC] Y: forward %lu ms\n",
+                static_cast<unsigned long>(kYForwardMs));
+  if (!RoutineDrive(kYForwardSpeed, kYForwardSpeed, kYForwardMs)) return;
   Serial.println("[RC] Y: following the line");
   // Prints LINE ENDED / did NOT end, and stops the motors itself.
   line_follower::FollowUntilLineEnds(0, kYFollowTimeoutMs, &RoutineCancelled);
