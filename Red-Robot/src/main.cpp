@@ -9,7 +9,7 @@
 //   kActuatorTest = each motor, then each servo, one by one, once
 //   kDriveTest    = forward, backward, pivot left, pivot right, once
 enum class AutonMode { kLineFollower, kActuatorTest, kDriveTest };
-constexpr AutonMode kAutonMode = AutonMode::kDriveTest;
+constexpr AutonMode kAutonMode = AutonMode::kLineFollower;
 
 // initialize any variables here
 void setup() {

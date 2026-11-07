@@ -1,6 +1,26 @@
 #include <RedRobot.h>
 bool useTankDrive = false;
 
+// Drive wiring (matches src/line_follower.cpp and the drive test):
+// motor port 0 = left wheel, wired backward so it is inverted here;
+// motor port 2 = right wheel. Speeds are -100..100, + = robot forward.
+namespace {
+constexpr uint8_t kLeftMotor = 0;
+constexpr uint8_t kRightMotor = 2;
+constexpr bool kInvertLeft = true;
+constexpr bool kInvertRight = false;
+
+void DriveLeft(int speed) {
+  speed = constrain(speed, -100, 100);
+  RedRobot::WriteDCMotor(kLeftMotor, kInvertLeft ? -speed : speed);
+}
+
+void DriveRight(int speed) {
+  speed = constrain(speed, -100, 100);
+  RedRobot::WriteDCMotor(kRightMotor, kInvertRight ? -speed : speed);
+}
+}  // namespace
+
 namespace Bluefruit
 {
   /* DPad_Pressed is called everytime a D-Pad button is pressed or released.
@@ -47,8 +67,8 @@ namespace Bluefruit
     }
 
     // Clamp and write speeds
-    RedRobot::WriteDCMotor(2, constrain(left_speed, -100, 100));
-    RedRobot::WriteDCMotor(3, constrain(right_speed, -100, 100));
+    DriveLeft(constrain(left_speed, -100, 100));
+    DriveRight(constrain(right_speed, -100, 100));
   }
 
   void Button1_Pressed(bool buttonPressedDown)
@@ -58,8 +78,8 @@ namespace Bluefruit
       RedRobot::StartRemoteControl();
 
       // start remote controlled with the DC motors off
-      RedRobot::WriteDCMotor(2, 0);
-      RedRobot::WriteDCMotor(3, 0);
+      DriveLeft(0);
+      DriveRight(0);
     }
   }
 
@@ -96,7 +116,7 @@ namespace RR_Controller
   void Joystick1(int8_t x, int8_t y)
   {
     if (useTankDrive)
-      RedRobot::WriteDCMotor(2, y);
+      DriveLeft(y);
     else
     {
       int leftMotor = y + x;
@@ -110,15 +130,15 @@ namespace RR_Controller
         leftMotor = leftMotor * 75 / maxMagnitude;
         rightMotor = rightMotor * 75 / maxMagnitude;
       }
-      RedRobot::WriteDCMotor(2, leftMotor);
-      RedRobot::WriteDCMotor(3, rightMotor);
+      DriveLeft(leftMotor);
+      DriveRight(rightMotor);
     }
   }
 
   void Joystick2(int8_t x, int8_t y)
   {
     if (useTankDrive)
-      RedRobot::WriteDCMotor(3, y);
+      DriveRight(y);
   }
 
   /* DPad_Pressed is called everytime a D-Pad button is pressed or released.
@@ -162,8 +182,8 @@ namespace RR_Controller
     }
 
     // Clamp and write speeds
-    RedRobot::WriteDCMotor(2, constrain(left_speed, -100, 100));
-    RedRobot::WriteDCMotor(3, constrain(right_speed, -100, 100));
+    DriveLeft(constrain(left_speed, -100, 100));
+    DriveRight(constrain(right_speed, -100, 100));
   }
 
   void ButtonX_Pressed(bool buttonPressedDown)
@@ -173,8 +193,8 @@ namespace RR_Controller
       RedRobot::StartRemoteControl();
 
       // start remote controlled with the DC motors off
-      RedRobot::WriteDCMotor(2, 0);
-      RedRobot::WriteDCMotor(3, 0);
+      DriveLeft(0);
+      DriveRight(0);
     }
   }
 
