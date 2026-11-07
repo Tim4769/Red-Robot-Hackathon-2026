@@ -3,7 +3,9 @@
 #include "line_follower.h"
 
 // Club controller (RR_Controller) layout:
-//   Left stick   drive (arcade)      Right stick  claw up/down (Y only)
+//   Left stick   up/down = forward/back (split layout, the default)
+//   Right stick  left/right = turn, up/down = claw up/down
+//                (kDriveLayout = kOneStick: left stick does all driving)
 //   X  line run + turn (test 9)      Y  delayed line run
 //      Either one: switches to driver control, runs its routine, then
 //      the sticks take over. X or Y again = cancel (-> driver now).
@@ -20,10 +22,17 @@ constexpr uint8_t kRightMotor = 2;
 constexpr bool kInvertLeft = true;
 constexpr bool kInvertRight = false;
 
-// Left stick sensitivity (arcade drive), in percent of the stick value.
-// 100 = original. Lower = gentler.
-constexpr int kJoystickDrivePercent = 80;  // Forward/back (stick Y).
-constexpr int kJoystickTurnPercent = 40;   // Left/right (stick X). Was 50.
+// Drive layout:
+//   kOneStick:   left stick does both: up/down = forward/back,
+//                left/right = turn (the original arcade drive).
+//   kSplitStick: LEFT stick up/down = forward/back, RIGHT stick left/right =
+//                turn. (Right stick up/down is still the claw lift.)
+enum class DriveLayout { kOneStick, kSplitStick };
+constexpr DriveLayout kDriveLayout = DriveLayout::kSplitStick;
+
+// Stick sensitivity, in percent of the stick value. 100 = original.
+constexpr int kJoystickDrivePercent = 80;  // Forward/back.
+constexpr int kJoystickTurnPercent = 40;   // Turning. Was 50.
 
 // =============================== Routines ==================================
 // Drive stick is ignored while a routine runs; the claw still works.
@@ -86,6 +95,8 @@ bool g_claw_closed = false;   // Assume it starts open.
 bool g_rotated = false;       // Assume it starts at kRotateAngleA.
 int g_lift_servo_angle = 90;  // Servo mode: current lift angle.
 volatile int g_lift_stick = 0;  // Latest right-stick Y (deadzoned, signed).
+int g_drive_stick = 0;  // Split layout: latest left-stick Y (forward/back).
+int g_turn_stick = 0;   // Split layout: latest right-stick X (turn).
 bool g_lift_task_started = false;
 enum class Routine { kLineEndTurn, kDelayedLineRun };  // X, Y.
 volatile bool g_routine_running = false;  // A routine is active.
@@ -322,12 +333,12 @@ namespace Bluefruit
 
 namespace RR_Controller
 {
-  // Left stick: arcade drive.
-  void Joystick1(int8_t x, int8_t y)
+  // Mixes forward/back and turn stick values into wheel speeds.
+  void MixDrive(int drive_stick, int turn_stick)
   {
     if (g_routine_running) return;  // A routine is driving.
-    const int drive = y * kJoystickDrivePercent / 100;
-    const int turn = x * kJoystickTurnPercent / 100;  // Less twitchy turns.
+    const int drive = drive_stick * kJoystickDrivePercent / 100;
+    const int turn = turn_stick * kJoystickTurnPercent / 100;
     int leftMotor = drive + turn;
     int rightMotor = drive - turn;
 
@@ -343,10 +354,30 @@ namespace RR_Controller
     DriveRight(rightMotor);
   }
 
-  // Right stick: claw up/down. Only Y is used.
+  // Left stick: one-stick layout = both axes; split layout = Y only.
+  void Joystick1(int8_t x, int8_t y)
+  {
+    if (kDriveLayout == DriveLayout::kOneStick)
+    {
+      MixDrive(y, x);
+      return;
+    }
+    g_drive_stick = abs(y) < kStickDeadzone ? 0 : y;
+    MixDrive(g_drive_stick, g_turn_stick);
+  }
+
+  // Right stick: Y = claw up/down. In the split layout, X = turn.
   void Joystick2(int8_t x, int8_t y)
   {
-    (void)x;
+    if (kDriveLayout == DriveLayout::kSplitStick)
+    {
+      const int turn = abs(x) < kStickDeadzone ? 0 : x;
+      if (turn != g_turn_stick)
+      {
+        g_turn_stick = turn;
+        MixDrive(g_drive_stick, g_turn_stick);
+      }
+    }
     const int stick = abs(y) < kStickDeadzone ? 0 : y;
     if (kLiftUsesMotor)
     {
