@@ -40,7 +40,9 @@
 #define LF3 40
 #define LF4 41
 #define LF5 42
-#define LF_LEDCTRL 43 // RXD0
+// Fixed: was 43 (that is TXD0 = MOTOR1_EN). The board netlist routes
+// LF_LEDCTRL to module pin 36 = RXD0 = GPIO44, so the IR LEDs never turned on.
+#define LF_LEDCTRL 44 // RXD0
 
 // BMS
 #define BMS_LOAD 4

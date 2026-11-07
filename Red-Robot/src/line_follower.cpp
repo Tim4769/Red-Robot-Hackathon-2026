@@ -52,7 +52,14 @@ constexpr float kAutoKdRatio = 0.06f;  // Kd = kAutoKdRatio * Kp (LF-2: 10x in
 // When true, Update() ONLY runs calibration, prints the results, then streams
 // live sensor readings with the motors stopped. Use it to check calibration
 // and sensor order before letting the robot drive.
-constexpr bool kCalibrationTestMode = false;
+constexpr bool kCalibrationTestMode = true;
+
+// When false, calibration does NOT drive the motors: you get
+// kHandCalibrationMs to slide the robot (or the tape) back and forth by hand
+// so every sensor passes over the tape. Safe on a desk / plugged into USB.
+// When true, the robot sweeps or spins by itself (see below).
+constexpr bool kCalibrationUseMotors = false;
+constexpr uint32_t kHandCalibrationMs = 6000;
 
 // When true, calibrate at the start of autonomous (sweep or full rotation,
 // see below). When false, skip it and use kSavedMin / kSavedMax. Copy those
@@ -289,7 +296,7 @@ void PrintCalibration(uint32_t duration_ms, int samples) {
       ++counted;
     }
   }
-  if (kCalibrationFullRotation && counted > 0) {
+  if (kCalibrationUseMotors && kCalibrationFullRotation && counted > 0) {
     const float average = static_cast<float>(total) / counted;
     const int expected = 2 * kFullRotations;
     Serial.printf("[CAL] Full rotation: average %.1f crossings/sensor, "
@@ -325,15 +332,23 @@ void PrintCalibration(uint32_t duration_ms, int samples) {
 }
 
 // Moves over the line while recording each sensor's min and max.
+//   Hand mode (kCalibrationUseMotors = false): motors stay off; you move the
+//   robot over the tape yourself.
 //   Sweep mode: symmetric left/right wiggle, so the robot ends facing about
 //   where it started.
 //   Full-rotation mode: constant spin in place (like LF-2) for
 //   kFullRotations turns, timed by kFullRotationMs.
 void Calibrate() {
   const uint32_t duration_ms =
-      kCalibrationFullRotation ? kFullRotationMs * kFullRotations
-                               : kCalibrationDurationMs;
-  if (kCalibrationFullRotation) {
+      !kCalibrationUseMotors     ? kHandCalibrationMs
+      : kCalibrationFullRotation ? kFullRotationMs * kFullRotations
+                                 : kCalibrationDurationMs;
+  if (!kCalibrationUseMotors) {
+    Serial.printf("[CAL] Hand calibration: motors OFF. For the next %lu ms, "
+                  "slide the robot back and forth over the tape so EVERY "
+                  "sensor passes over it a few times.\n",
+                  static_cast<unsigned long>(duration_ms));
+  } else if (kCalibrationFullRotation) {
     Serial.printf("[CAL] Full rotation: %d turn(s) %s, %lu ms at speed %d.\n",
                   kFullRotations,
                   kFullRotationClockwise ? "clockwise" : "counterclockwise",
@@ -365,7 +380,9 @@ void Calibrate() {
           ((elapsed_ms + kCalibrationSweepMs / 2) / kCalibrationSweepMs) % 2 ==
           0;
     }
-    if (turn_left) {
+    if (!kCalibrationUseMotors) {
+      // Hand mode: never touch the motors.
+    } else if (turn_left) {
       SetDrive(-kCalibrationSpeed, kCalibrationSpeed);
     } else {
       SetDrive(kCalibrationSpeed, -kCalibrationSpeed);
@@ -394,7 +411,9 @@ void PrintConfig() {
                 kCalibrationTestMode ? "CALIBRATION_TEST" : "FOLLOW",
                 kUseAutoGain ? "ON" : "OFF", kCalibrateAtStart ? "YES" : "NO");
   Serial.printf("[LF] calibration motion=%s\n",
-                kCalibrationFullRotation ? "FULL_ROTATION" : "SWEEP");
+                !kCalibrationUseMotors     ? "BY_HAND (motors off)"
+                : kCalibrationFullRotation ? "FULL_ROTATION"
+                                           : "SWEEP");
   if (kUseAutoGain) {
     Serial.printf("[LF] Kp=%.2f..%.2f (auto)  Ki=%.3f  Kd=%.3f*Kp\n",
                   kAutoKpMin, kAutoKpMax, kKi, kAutoKdRatio);
