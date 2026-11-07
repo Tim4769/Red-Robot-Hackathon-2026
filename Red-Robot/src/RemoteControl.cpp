@@ -10,6 +10,11 @@ constexpr uint8_t kRightMotor = 2;
 constexpr bool kInvertLeft = true;
 constexpr bool kInvertRight = false;
 
+// Joystick turning sensitivity (arcade drive, left stick X), in percent of
+// the stick's left/right value. 100 = original (very twitchy), 50 = full
+// sideways stick turns half as hard. Forward/back (Y) is unchanged.
+constexpr int kJoystickTurnPercent = 50;
+
 void DriveLeft(int speed) {
   speed = constrain(speed, -100, 100);
   RedRobot::WriteDCMotor(kLeftMotor, kInvertLeft ? -speed : speed);
@@ -119,8 +124,9 @@ namespace RR_Controller
       DriveLeft(y);
     else
     {
-      int leftMotor = y + x;
-      int rightMotor = y - x;
+      const int turn = x * kJoystickTurnPercent / 100;  // Less twitchy turns.
+      int leftMotor = y + turn;
+      int rightMotor = y - turn;
 
       // Normalize to [-100, 100]
       int maxMagnitude = max(abs(leftMotor), abs(rightMotor));
