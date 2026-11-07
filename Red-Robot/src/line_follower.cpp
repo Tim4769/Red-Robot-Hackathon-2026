@@ -459,7 +459,7 @@ void PrintConfig() {
                 kMaxReverse, kRememberBends ? "ON" : "OFF", kWideSensorCount,
                 kBendMinOffset, static_cast<unsigned long>(kBranchMemoryMs));
   Serial.printf("[LF] line seen if a sensor >= %.2f (else LOST); position "
-                "ignores readings < %.2f. Status "max=0.xx(<seen)" = line lost.\n",
+                "ignores readings < %.2f. Status 'max=0.xx(<seen)' = line lost.\n",
                 kLineSeenThreshold, kNoiseFloor);
   Serial.println("[LF] Status line: t, dt (time since last PID step), read "
                  "(sensor read time), mode, n (0=floor 1=line, left->right), "
