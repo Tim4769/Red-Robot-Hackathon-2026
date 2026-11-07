@@ -29,11 +29,14 @@ constexpr uint32_t kStressMarker = 0x5752E55A;
 
 // ===================== Test 9: line end -> back, turn ======================
 // Drive straight forward first (kStartForwardMs), then follow the line;
-// after kLineEndArmMs of following, when the line ends: back up, turn
-// RIGHT ~120 degrees, drive forward, stop.
+// as soon as the line ends: back up, turn RIGHT ~120 degrees, drive forward,
+// stop.
 constexpr int kStartForwardSpeed = 40;
 constexpr uint32_t kStartForwardMs = 1500;
-constexpr uint32_t kLineEndArmMs = 3000;      // Only check for the end after.
+// Delay before the line-end check starts (0 = check from the first step).
+// Was 3000. With 0, if the robot isn't on the line when following starts,
+// that counts as "line ended" right away.
+constexpr uint32_t kLineEndArmMs = 0;
 constexpr uint32_t kLineEndTimeoutMs = 20000;  // Give up if it never ends.
 constexpr int kBackSpeed = 40;
 constexpr uint32_t kBackMs = 500;
@@ -311,9 +314,10 @@ void RunFollow(int seconds, int) {
 void RunLineEnd(int turn_ms, int forward_ms) {
   const uint32_t turn = turn_ms > 0 ? turn_ms : kTurn120Ms;
   const uint32_t forward = forward_ms > 0 ? forward_ms : kForwardMs;
-  Serial.printf("[DT] Line end: forward %d%% %lu ms, then follow; after %lu "
-                "ms of following, when the line ends: back %d%% %lu ms, turn "
-                "RIGHT %d%% %lu ms (~120 deg), forward %d%% %lu ms, stop.\n",
+  Serial.printf("[DT] Line end: forward %d%% %lu ms, then follow; line-end "
+                "check after %lu ms; when the line ends: back %d%% %lu ms, "
+                "turn RIGHT %d%% %lu ms (~120 deg), forward %d%% %lu ms, "
+                "stop.\n",
                 kStartForwardSpeed, static_cast<unsigned long>(kStartForwardMs),
                 static_cast<unsigned long>(kLineEndArmMs), kBackSpeed,
                 static_cast<unsigned long>(kBackMs), kTurnSpeed,
@@ -401,9 +405,9 @@ constexpr DriveTest kTests[] = {
     {"lineend", "[turn_ms fwd_ms]", "Follow; at line end: back, right 120, fwd",
      "PLACE THE ROBOT ON THE LINE (centered, facing along it), with the end "
      "of the line ahead and ~50 cm clear to the right.",
-     "Drives straight forward 1.5 s, then follows the line. After 3 s of "
-     "following, when the line ends: back 0.5 s, turn RIGHT ~120 deg "
-     "(timed), forward 1 s, stop. Any key stops it.",
+     "Drives straight forward 1.5 s, then follows the line. As soon as the "
+     "line ends: back 0.5 s, turn RIGHT ~120 deg (timed), forward 1 s, "
+     "stop. Any key stops it.",
      RunLineEnd},
 };
 constexpr int kNumTests = sizeof(kTests) / sizeof(kTests[0]);
