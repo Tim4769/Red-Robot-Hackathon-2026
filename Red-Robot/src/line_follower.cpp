@@ -154,6 +154,7 @@ uint16_t g_max[kNumSensors];
 uint16_t g_cal_samples[kMaxCalibrationSamples][kNumSensors];
 int g_cal_sample_count = 0;
 bool g_initialized = false;
+bool g_calibrated = false;  // g_min/g_max hold real values.
 uint32_t g_auton_start_ms = 0;
 uint32_t g_last_step_ms = 0;
 uint32_t g_last_pid_us = 0;
@@ -405,6 +406,7 @@ void Calibrate() {
   }
   SetDrive(0, 0);
   PrintCalibration(elapsed_ms, samples);
+  g_calibrated = true;
 }
 
 void PrintConfig() {
@@ -507,6 +509,7 @@ void Initialize() {
       g_min[i] = kSavedMin[i];
       g_max[i] = kSavedMax[i];
     }
+    g_calibrated = true;
     Serial.println("[LF] Using saved calibration (kSavedMin / kSavedMax).");
   }
   ResetPid();
@@ -514,28 +517,9 @@ void Initialize() {
   g_last_pid_us = micros();
 }
 
-}  // namespace
-
-void Update() {
-  const uint32_t now_ms = millis();
-  if (!g_initialized) Initialize();
-
-  if (kCalibrationTestMode) {
-    RunCalibrationTest(now_ms);
-    return;
-  }
-
-  if (g_mode == Mode::kDone) return;
-  if (now_ms - g_auton_start_ms >= kAutonDurationMs) {
-    SetDrive(0, 0);
-    SetMode(Mode::kDone, now_ms);
-    Serial.printf("[LF] Autonomous time up after %lu ms. Motors stopped.\n",
-                  static_cast<unsigned long>(kAutonDurationMs));
-    return;
-  }
-  if (now_ms - g_last_step_ms < kControlPeriodMs) return;
-  g_last_step_ms = now_ms;
-
+// One control step: read sensors, pick a mode (PID / edge pivot / lost),
+// drive the wheels, and print a status line every kDebugPrintPeriodMs.
+void ControlStep(uint32_t now_ms) {
   SensorReading reading;
   ReadSensors(&reading);
 
@@ -617,6 +601,75 @@ void Update() {
     g_last_print_ms = now_ms;
     PrintStatus(now_ms, dt_s * 1000.0f, reading, pid, speed, left, right);
   }
+}
+
+}  // namespace
+
+void Update() {
+  const uint32_t now_ms = millis();
+  if (!g_initialized) Initialize();
+
+  if (kCalibrationTestMode) {
+    RunCalibrationTest(now_ms);
+    return;
+  }
+
+  if (g_mode == Mode::kDone) return;
+  if (now_ms - g_auton_start_ms >= kAutonDurationMs) {
+    SetDrive(0, 0);
+    SetMode(Mode::kDone, now_ms);
+    Serial.printf("[LF] Autonomous time up after %lu ms. Motors stopped.\n",
+                  static_cast<unsigned long>(kAutonDurationMs));
+    return;
+  }
+  if (now_ms - g_last_step_ms < kControlPeriodMs) return;
+  g_last_step_ms = now_ms;
+
+  ControlStep(now_ms);
+}
+
+void CalibrateNow() { Calibrate(); }
+
+bool FollowFor(uint32_t duration_ms, bool (*should_abort)()) {
+  if (!g_calibrated) {
+    for (int i = 0; i < kNumSensors; ++i) {
+      g_min[i] = kSavedMin[i];
+      g_max[i] = kSavedMax[i];
+    }
+    g_calibrated = true;
+    Serial.println("[LF] Not calibrated yet: using kSavedMin / kSavedMax. "
+                   "Run the calibrate test first for real values.");
+  }
+  Serial.printf("[LF] Following for %lu ms: Kp=%.2f Ki=%.3f Kd=%.3f base=%d "
+                "auto_gain=%s\n",
+                static_cast<unsigned long>(duration_ms), kKp, kKi, kKd,
+                kBaseSpeed, kUseAutoGain ? "ON" : "OFF");
+  ResetPid();
+  g_mode = Mode::kPid;
+  g_last_position = 0.0f;
+  g_auton_start_ms = millis();
+  g_last_step_ms = 0;
+  g_last_print_ms = 0;
+  g_last_pid_us = micros();
+
+  bool completed = true;
+  while (millis() - g_auton_start_ms < duration_ms) {
+    if (should_abort != nullptr && should_abort()) {
+      completed = false;
+      break;
+    }
+    const uint32_t now_ms = millis();
+    if (now_ms - g_last_step_ms >= kControlPeriodMs) {
+      g_last_step_ms = now_ms;
+      ControlStep(now_ms);
+    }
+    delay(1);
+  }
+  SetDrive(0, 0);
+  Serial.printf("[LF] Follow %s after %lu ms. Motors stopped.\n",
+                completed ? "finished" : "ABORTED",
+                static_cast<unsigned long>(millis() - g_auton_start_ms));
+  return completed;
 }
 
 }  // namespace line_follower
