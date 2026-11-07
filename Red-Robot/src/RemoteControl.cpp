@@ -37,11 +37,9 @@ constexpr int kJoystickTurnPercent = 40;   // Turning. Was 50.
 // =============================== Routines ==================================
 // Drive stick is ignored while a routine runs; the claw still works.
 //
-// X: same as console test 9 (keep in sync with src/drive_test.cpp):
-// forward, follow the line, and when it ends: back up, turn right ~120 deg,
-// forward, stop.
-constexpr int kXStartForwardSpeed = 40;
-constexpr uint32_t kXStartForwardMs = 1000;
+// X: like console test 9 but WITHOUT its blind forward drive at the start
+// (start the robot on the line): follow the line, and when it ends: back up,
+// turn right ~120 deg, forward, stop.
 constexpr uint32_t kXFollowTimeoutMs = 20000;  // Stop if it never ends.
 constexpr int kXBackSpeed = 40;
 constexpr uint32_t kXBackMs = 500;
@@ -50,11 +48,9 @@ constexpr uint32_t kXTurnMs = 890;             // ~120 deg (timed).
 constexpr int kXForwardSpeed = 40;
 constexpr uint32_t kXForwardMs = 1000;
 //
-// Y: wait kYStartDelayMs, drive straight kYForwardMs, then follow the line
-// and STOP when it ends.
+// Y: wait kYStartDelayMs, then follow the line (no blind forward drive:
+// start the robot on the line) and STOP when it ends.
 constexpr uint32_t kYStartDelayMs = 5000;
-constexpr int kYForwardSpeed = 40;
-constexpr uint32_t kYForwardMs = 1000;
 constexpr uint32_t kYFollowTimeoutMs = 15000;  // Stop if the line never ends.
 
 // ============================ Claw mechanism ===============================
@@ -160,14 +156,8 @@ bool RoutineDrive(int left, int right, uint32_t ms) {
   return ok;
 }
 
-// X: forward, follow, and at the line end: back, turn right, forward.
+// X: follow, and at the line end: back, turn right, forward.
 void RunLineEndTurn() {
-  Serial.printf("[RC] X: forward %lu ms\n",
-                static_cast<unsigned long>(kXStartForwardMs));
-  if (!RoutineDrive(kXStartForwardSpeed, kXStartForwardSpeed,
-                    kXStartForwardMs)) {
-    return;
-  }
   Serial.println("[RC] X: following the line");
   if (!line_follower::FollowUntilLineEnds(0, kXFollowTimeoutMs,
                                           &RoutineCancelled)) {
@@ -183,14 +173,11 @@ void RunLineEndTurn() {
   RoutineDrive(kXForwardSpeed, kXForwardSpeed, kXForwardMs);
 }
 
-// Y: wait, forward, follow, stop at the line end.
+// Y: wait, follow, stop at the line end.
 void RunDelayedLineRun() {
   Serial.printf("[RC] Y: waiting %lu ms\n",
                 static_cast<unsigned long>(kYStartDelayMs));
   if (!RoutineWait(kYStartDelayMs)) return;
-  Serial.printf("[RC] Y: forward %lu ms\n",
-                static_cast<unsigned long>(kYForwardMs));
-  if (!RoutineDrive(kYForwardSpeed, kYForwardSpeed, kYForwardMs)) return;
   Serial.println("[RC] Y: following the line");
   // Prints LINE ENDED / did NOT end, and stops the motors itself.
   line_follower::FollowUntilLineEnds(0, kYFollowTimeoutMs, &RoutineCancelled);
