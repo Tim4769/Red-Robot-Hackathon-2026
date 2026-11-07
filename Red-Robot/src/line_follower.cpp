@@ -42,9 +42,10 @@ constexpr float kKd = 1.2f;   // Derivative: per (error / second).
 // from how strongly the center sensors see the line. Gentle when centered,
 // aggressive when drifting off. kKp and kKd above are then ignored (kKi is
 // still used).
-constexpr bool kUseAutoGain = false;
-constexpr float kAutoKpMin = 8.0f;     // Kp when the center sees the line fully.
-constexpr float kAutoKpMax = 30.0f;    // Kp when the center barely sees it.
+constexpr bool kUseAutoGain = true;
+constexpr float kAutoKpMin = 10.0f;    // Kp when the center sees the line fully.
+constexpr float kAutoKpMax = 40.0f;    // Kp when the center barely sees it.
+                                       // (Was 8 / 30: turned too late.)
 constexpr float kAutoKdRatio = 0.06f;  // Kd = kAutoKdRatio * Kp (LF-2: 10x in
                                        // its own units).
 
