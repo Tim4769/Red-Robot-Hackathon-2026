@@ -117,6 +117,10 @@ constexpr int kMinSpeed = 20;               // Forward speed floor on curves.
 constexpr float kSlowdownPerError = 0.25f;  // Speed cut per unit of |error|.
 constexpr int kEdgeTurnSpeed = 45;          // Outer wheel speed in a pivot.
 constexpr int kLostTurnSpeed = 35;          // Pivot speed when the line is lost.
+// Inner wheel may run BACKWARD up to this % while following, so sharp bends
+// can be turned tighter. Only happens on big errors (correction > speed);
+// straight-line following is unchanged. 0 = never reverse (LF-2).
+constexpr int kMaxReverse = 30;
 constexpr uint32_t kAutonDurationMs = 20000;
 constexpr uint32_t kControlPeriodMs = 15;   // Minimum time between steps.
 constexpr float kIntegralLimit = 2.0f;      // |integral| cap (error x second).
@@ -125,6 +129,18 @@ constexpr float kIntegralLimit = 2.0f;      // |integral| cap (error x second).
 constexpr float kOnLineThreshold = 0.5f;  // LF-2's (min + max) / 2 midpoint.
 constexpr float kNoiseFloor = 0.1f;       // Ignore weaker readings.
 constexpr float kLostLineSum = 0.3f;      // Total below this: line is lost.
+
+// ================================= Bends ===================================
+// When kWideSensorCount or more sensors see tape (a bend or an intersection),
+// remember which side has more tape. If the line is then lost within
+// kBranchMemoryMs, the lost-line turn goes toward that side (the bend)
+// instead of the side the line was last seen, which is ~random at the end of
+// a bend. Tape even on both sides (a + intersection) clears the memory, so
+// intersections still go straight. false = old lost-line turn only.
+constexpr bool kRememberBends = true;
+constexpr int kWideSensorCount = 3;
+constexpr float kBendMinOffset = 0.3f;     // |avg position| = one-sided.
+constexpr uint32_t kBranchMemoryMs = 800;
 
 // Sensor positions, robot's left to right, in sensor spacings from center.
 constexpr float kSensorPosition[kNumSensors] = {-2.5f, -1.5f, -0.5f,
@@ -165,6 +181,8 @@ float g_previous_error = 0.0f;
 bool g_has_previous_error = false;
 float g_last_position = 0.0f;
 Mode g_mode = Mode::kPid;
+int g_bend_side = 0;           // -1 left / +1 right: last one-sided wide read.
+uint32_t g_bend_seen_ms = 0;   // When it was seen (0 = none).
 
 const char* ModeName(Mode mode) {
   switch (mode) {
@@ -428,6 +446,10 @@ void PrintConfig() {
   Serial.printf("[LF] base=%d min=%d period=%lums auton=%lums\n", kBaseSpeed,
                 kMinSpeed, static_cast<unsigned long>(kControlPeriodMs),
                 static_cast<unsigned long>(kAutonDurationMs));
+  Serial.printf("[LF] max_reverse=%d%%  remember_bends=%s (>=%d sensors, "
+                "|pos|>=%.1f, %lums)\n",
+                kMaxReverse, kRememberBends ? "ON" : "OFF", kWideSensorCount,
+                kBendMinOffset, static_cast<unsigned long>(kBranchMemoryMs));
   Serial.println("[LF] Status line: t, dt (time since last PID step), read "
                  "(sensor read time), mode, n (0=floor 1=line, left->right), "
                  "pos (<0 = line on left), gains, P/I/D terms, corr, speeds");
@@ -532,6 +554,22 @@ void ControlStep(uint32_t now_ms) {
   int speed = 0;
   int left = 0;
   int right = 0;
+
+  // Many sensors on tape: a bend (tape mostly on one side) or an
+  // intersection (tape on both sides). Remember a bend's side.
+  if (kRememberBends) {
+    int on_count = 0;
+    for (int i = 0; i < kNumSensors; ++i) on_count += reading.on_line[i];
+    if (on_count >= kWideSensorCount) {
+      if (fabsf(reading.position) >= kBendMinOffset) {
+        g_bend_side = reading.position < 0.0f ? -1 : 1;
+        g_bend_seen_ms = now_ms;
+      } else {
+        g_bend_seen_ms = 0;  // Even on both sides: intersection, go straight.
+      }
+    }
+  }
+
   const bool outer_left = reading.on_line[0];
   const bool outer_right = reading.on_line[kNumSensors - 1];
 
@@ -580,14 +618,34 @@ void ControlStep(uint32_t now_ms) {
     speed = static_cast<int>(kBaseSpeed *
                              (1.0f - kSlowdownPerError * fabsf(error)));
     speed = max(speed, kMinSpeed);
-    // Like LF-2, wheels never reverse while following.
-    left = constrain(static_cast<int>(speed + pid.correction), 0, 100);
-    right = constrain(static_cast<int>(speed - pid.correction), 0, 100);
+    // The inner wheel may reverse (down to -kMaxReverse) on sharp turns.
+    left = constrain(static_cast<int>(speed + pid.correction), -kMaxReverse,
+                     100);
+    right = constrain(static_cast<int>(speed - pid.correction), -kMaxReverse,
+                      100);
     g_last_position = reading.position;
   } else {
-    // Line lost: pivot toward the side it was last seen on.
+    // Line lost: pivot toward a bend seen just before (the line turned),
+    // otherwise toward the side the line was last seen on.
+    const bool entering = g_mode != Mode::kLost;
     SetMode(Mode::kLost, now_ms);
-    if (g_last_position < 0.0f) {
+    const bool recent_bend = kRememberBends && g_bend_seen_ms != 0 &&
+                             now_ms - g_bend_seen_ms < kBranchMemoryMs;
+    const bool turn_left =
+        recent_bend ? g_bend_side < 0 : g_last_position < 0.0f;
+    if (entering && kDebugPrint) {
+      if (recent_bend) {
+        Serial.printf("[LF] line lost: turning %s toward the bend seen %lu "
+                      "ms ago\n",
+                      turn_left ? "LEFT" : "RIGHT",
+                      static_cast<unsigned long>(now_ms - g_bend_seen_ms));
+      } else {
+        Serial.printf("[LF] line lost: turning %s (last pos %+.2f, no "
+                      "recent bend)\n",
+                      turn_left ? "LEFT" : "RIGHT", g_last_position);
+      }
+    }
+    if (turn_left) {
       left = -kLostTurnSpeed;
       right = kLostTurnSpeed;
     } else {
@@ -648,6 +706,8 @@ bool FollowFor(uint32_t duration_ms, bool (*should_abort)()) {
   ResetPid();
   g_mode = Mode::kPid;
   g_last_position = 0.0f;
+  g_bend_side = 0;
+  g_bend_seen_ms = 0;
   g_auton_start_ms = millis();
   g_last_step_ms = 0;
   g_last_print_ms = 0;
