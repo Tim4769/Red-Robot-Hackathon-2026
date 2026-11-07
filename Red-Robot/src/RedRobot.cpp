@@ -36,10 +36,14 @@ namespace Battery {
     // R26 = 100k, R27 = 33k
     // so Vin = Vout * ((R26+R27)/R27) = Vout * 4.0303
     uint32_t mv = analogReadMilliVolts(ADC1_0);
-    float volts = mv / 1000.0; 
-    if (volts < 6.0f) digitalWrite(LBAT_LED, HIGH);
+    float pin_volts = mv / 1000.0;
+    float battery_volts = pin_volts * 4.0303;
+    // Fixed: this compared the PIN voltage (<= ~2 V after the divider) to
+    // 6 V, so the low-battery LED was always on. Compare the battery voltage.
+    // 6.0 V = 1.0 V per cell for the 6x NiMH pack (empty).
+    if (battery_volts < 6.0f) digitalWrite(LBAT_LED, HIGH);
     else digitalWrite(LBAT_LED, LOW);
-    return volts * 4.0303;
+    return battery_volts;
   }
 } // namespace Battery
 
