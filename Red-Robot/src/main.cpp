@@ -4,9 +4,12 @@
 #include "hardware_test.h"
 #include "line_follower.h"
 
-// true: run the one-by-one motor/servo test (src/hardware_test.cpp) once
-// instead of the line follower. Set false for normal autonomous.
-constexpr bool kHardwareTestMode = false;
+// What AutonomousLoop() runs:
+//   kLineFollower = normal autonomous (src/line_follower.cpp)
+//   kActuatorTest = each motor, then each servo, one by one, once
+//   kDriveTest    = forward, backward, pivot left, pivot right, once
+enum class AutonMode { kLineFollower, kActuatorTest, kDriveTest };
+constexpr AutonMode kAutonMode = AutonMode::kDriveTest;
 
 // initialize any variables here
 void setup() {
@@ -21,9 +24,15 @@ void setup() {
 // The club's original example sequence is in git history (upstream commit
 // "Working auton toggle; example starter code").
 void AutonomousLoop() {
-  if (kHardwareTestMode) {
-    hardware_test::RunOnce();
-    return;
+  switch (kAutonMode) {
+    case AutonMode::kActuatorTest:
+      hardware_test::RunOnce();
+      break;
+    case AutonMode::kDriveTest:
+      hardware_test::RunDriveOnce();
+      break;
+    case AutonMode::kLineFollower:
+      line_follower::Update();  // Tuning/test switches: src/line_follower.cpp
+      break;
   }
-  line_follower::Update();  // Tuning and test switches: src/line_follower.cpp
 }

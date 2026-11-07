@@ -18,13 +18,37 @@ constexpr uint8_t kServos[] = {0, 1, 2, 3};
 constexpr int kServoAngles[] = {90, 0, 90, 180, 90};  // Sweep, end centered.
 constexpr uint32_t kServoStepMs = 700;
 
+// Drive test wiring: which port drives which wheel.
+constexpr uint8_t kLeftDriveMotor = 0;
+constexpr uint8_t kRightDriveMotor = 2;
+constexpr int kDriveSpeed = 50;           // Percent.
+constexpr uint32_t kDriveRunMs = 1000;    // Per maneuver.
+
+struct Maneuver {
+  const char* name;
+  const char* expect;
+  int left;
+  int right;
+};
+
+constexpr Maneuver kManeuvers[] = {
+    {"FORWARD", "both wheels push the robot forward", kDriveSpeed,
+     kDriveSpeed},
+    {"BACKWARD", "both wheels pull the robot backward", -kDriveSpeed,
+     -kDriveSpeed},
+    {"TURN LEFT (pivot)", "left wheel back, right wheel forward",
+     -kDriveSpeed, kDriveSpeed},
+    {"TURN RIGHT (pivot)", "left wheel forward, right wheel back",
+     kDriveSpeed, -kDriveSpeed},
+};
+
 // Waits for a serial monitor (up to 15 s) so no output is lost, then counts
 // down so you can get your hands clear.
-void WaitForMonitor() {
+void WaitForMonitor(const char* title) {
   const uint32_t start = millis();
   while (!Serial && millis() - start < 15000) delay(10);
   Serial.println();
-  Serial.println("[HW] ===== Hardware test: motors, then servos =====");
+  Serial.printf("[HW] ===== %s =====\n", title);
   Serial.println("[HW] Wheels OFF the ground. Battery must be on: USB alone "
                  "may not power motors/servos.");
   for (int s = 3; s > 0; --s) {
@@ -70,7 +94,7 @@ bool g_done = false;
 void RunOnce() {
   if (g_done) return;
   g_done = true;
-  WaitForMonitor();
+  WaitForMonitor("Actuator test: each motor, then each servo");
 
   const int total = sizeof(kMotors) + sizeof(kServos);
   int step = 1;
@@ -79,6 +103,31 @@ void RunOnce() {
 
   Serial.println("[HW] ===== Done. Press reset (or replug USB) to run again. "
                  "=====");
+}
+
+void RunDriveOnce() {
+  if (g_done) return;
+  g_done = true;
+  WaitForMonitor("Drive test: forward, backward, turn left, turn right");
+  Serial.printf("[DRIVE] left = motor %u, right = motor %u, speed %d%%, "
+                "%lu ms each\n",
+                kLeftDriveMotor, kRightDriveMotor, kDriveSpeed,
+                static_cast<unsigned long>(kDriveRunMs));
+
+  const int total = sizeof(kManeuvers) / sizeof(kManeuvers[0]);
+  for (int i = 0; i < total; ++i) {
+    const Maneuver& m = kManeuvers[i];
+    Serial.printf("[DRIVE] %d/%d %s: L=%+d R=%+d (expect: %s)\n", i + 1,
+                  total, m.name, m.left, m.right, m.expect);
+    RedRobot::WriteDCMotor(kLeftDriveMotor, m.left);
+    RedRobot::WriteDCMotor(kRightDriveMotor, m.right);
+    delay(kDriveRunMs);
+    RedRobot::WriteDCMotor(kLeftDriveMotor, 0);
+    RedRobot::WriteDCMotor(kRightDriveMotor, 0);
+    delay(kPauseMs);
+  }
+  Serial.println("[DRIVE] ===== Done. Press reset (or replug USB) to run "
+                 "again. =====");
 }
 
 }  // namespace hardware_test

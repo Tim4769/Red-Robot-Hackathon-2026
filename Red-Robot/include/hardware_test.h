@@ -13,6 +13,10 @@ namespace hardware_test {
 // do nothing. Call it from AutonomousLoop().
 void RunOnce();
 
+// Drive test, once: forward, backward, pivot left, pivot right (1 s each at
+// 50%), printing what each wheel should be doing. Blocking, about 9 s.
+void RunDriveOnce();
+
 }  // namespace hardware_test
 
 #endif  // RED_ROBOT_HARDWARE_TEST_H_

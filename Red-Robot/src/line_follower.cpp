@@ -98,8 +98,8 @@ constexpr uint32_t kDebugPrintPeriodMs = 100;  // One status line per period.
 constexpr uint32_t kTestPrintPeriodMs = 200;   // Calibration test stream.
 
 // ============================== Robot setup ================================
-constexpr uint8_t kLeftMotor = 2;
-constexpr uint8_t kRightMotor = 3;
+constexpr uint8_t kLeftMotor = 0;   // Wired: motor port 0 = left wheel.
+constexpr uint8_t kRightMotor = 2;  // Wired: motor port 2 = right wheel.
 constexpr bool kInvertLeftMotor = false;   // Flip if the wheel spins backward.
 constexpr bool kInvertRightMotor = false;
 // Flip if the position sign is backwards (line on the left reads positive).
