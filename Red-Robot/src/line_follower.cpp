@@ -43,8 +43,9 @@ constexpr float kKd = 1.2f;   // Derivative: per (error / second).
 // aggressive when drifting off. kKp and kKd above are then ignored (kKi is
 // still used).
 constexpr bool kUseAutoGain = false;
-constexpr float kAutoKpMin = 8.0f;     // Kp when the center sees the line fully.
-constexpr float kAutoKpMax = 30.0f;    // Kp when the center barely sees it.
+constexpr float kAutoKpMin = 10.0f;    // Kp when the center sees the line fully.
+constexpr float kAutoKpMax = 40.0f;    // Kp when the center barely sees it.
+                                       // (Was 8 / 30: turned too late.)
 constexpr float kAutoKdRatio = 0.06f;  // Kd = kAutoKdRatio * Kp (LF-2: 10x in
                                        // its own units).
 
@@ -66,9 +67,10 @@ constexpr uint32_t kHandCalibrationMs = 10000;
 // from the calibration test output on the real field.
 constexpr bool kCalibrateAtStart = true;
 constexpr int kNumSensors = 6;
-constexpr uint16_t kSavedMin[kNumSensors] = {100, 100, 100, 100, 100, 100};
-constexpr uint16_t kSavedMax[kNumSensors] = {2000, 2000, 2000, 2000, 2000,
-                                             2000};
+// From a hand calibration on the robot (Nov 7). Recalibrate on the real field.
+constexpr uint16_t kSavedMin[kNumSensors] = {966, 1036, 884, 907, 926, 886};
+constexpr uint16_t kSavedMax[kNumSensors] = {2847, 2865, 2385,
+                                             2484, 2760, 3212};
 
 // Calibration motion:
 //   true  = FULL ROTATION: spin in place like LF-2. Every sensor passes over
@@ -116,21 +118,78 @@ constexpr int kMinSpeed = 20;               // Forward speed floor on curves.
 constexpr float kSlowdownPerError = 0.25f;  // Speed cut per unit of |error|.
 constexpr int kEdgeTurnSpeed = 45;          // Outer wheel speed in a pivot.
 constexpr int kLostTurnSpeed = 35;          // Pivot speed when the line is lost.
+// Inner wheel may run BACKWARD up to this % while following, so sharp bends
+// can be turned tighter. Only happens on big errors (correction > speed);
+// straight-line following is unchanged. 0 = never reverse (LF-2).
+constexpr int kMaxReverse = 30;
 constexpr uint32_t kAutonDurationMs = 20000;
 constexpr uint32_t kControlPeriodMs = 15;   // Minimum time between steps.
 constexpr float kIntegralLimit = 2.0f;      // |integral| cap (error x second).
 
 // Normalized-value thresholds (0 = floor, 1 = line).
 constexpr float kOnLineThreshold = 0.5f;  // LF-2's (min + max) / 2 midpoint.
-constexpr float kNoiseFloor = 0.1f;       // Ignore weaker readings.
-constexpr float kLostLineSum = 0.3f;      // Total below this: line is lost.
+constexpr float kNoiseFloor = 0.2f;       // Ignore weaker readings (floor
+                                          // noise) in the position average.
+// The line counts as seen only if at least ONE sensor reads at least this.
+// (It used to be "sum of all sensors >= 0.3", which a slightly dark floor
+// reaches on 2-3 sensors, so a lost line was never detected.)
+constexpr float kLineSeenThreshold = 0.4f;
+
+// ================================= Bends ===================================
+// When kWideSensorCount or more sensors see tape (a bend or an intersection),
+// remember which side has more tape. If the line is then lost within
+// kBranchMemoryMs, the lost-line turn goes toward that side (the bend)
+// instead of the side the line was last seen, which is ~random at the end of
+// a bend. Tape even on both sides (a + intersection) clears the memory, so
+// intersections still go straight. false = old lost-line turn only.
+constexpr bool kRememberBends = true;
+constexpr int kWideSensorCount = 3;
+constexpr float kBendMinOffset = 0.3f;     // |avg position| = one-sided.
+constexpr uint32_t kBranchMemoryMs = 800;
+
+// ============================ Finding the line ==============================
+// SEARCH (kSearchForLine): at the start, drive straight at kSearchSpeed until
+// a sensor sees the line, instead of spinning in place. Gives up (stops)
+// after kSearchTimeoutMs.
+constexpr bool kSearchForLine = true;
+constexpr int kSearchSpeed = 30;
+constexpr uint32_t kSearchTimeoutMs = 5000;
+
+// ACQUIRE (kAcquireAtAngle): once the line is found, line up with it before
+// PID, so a steep approach angle doesn't make it overshoot or turn the long
+// way (the LF-2 edge rule would pivot toward the side the line touched
+// first, which is the WRONG way on an angled approach).
+//   1. ACQUIRE:  keep creeping straight at kAcquireSpeed, edge rule off,
+//                until a center sensor (S2/S3) is on the line. Note which way
+//                the line moved across the sensor bar on the way:
+//                left -> right means the line's forward direction is RIGHT.
+//                If that took longer than kShallowSweepMs, the angle is
+//                shallow: start PID right away (PID handles shallow angles).
+//   2. DRIVE_ON: keep going kDriveOnMs so the WHEELS reach the line (the bar
+//                is in front of the wheels). MEASURE THIS on your robot.
+//   3. ALIGN:    pivot toward the line's forward direction until a center
+//                sensor leaves and then finds the line again, then PID.
+constexpr bool kAcquireAtAngle = true;
+constexpr int kAcquireSpeed = 25;
+constexpr uint32_t kShallowSweepMs = 600;
+constexpr uint32_t kDriveOnMs = 300;
+constexpr int kAlignSpeed = 35;
+constexpr uint32_t kAlignMinMs = 150;      // Pivot at least this long.
+constexpr uint32_t kAlignTimeoutMs = 3000;  // Then give up and follow.
+constexpr float kMinSweep = 0.5f;  // Line must move this far across the bar
+                                   // to decide a direction (else default).
+constexpr bool kDefaultTurnRight = true;  // Head-on (no clear sweep).
 
 // Sensor positions, robot's left to right, in sensor spacings from center.
 constexpr float kSensorPosition[kNumSensors] = {-2.5f, -1.5f, -0.5f,
                                                 0.5f,  1.5f,  2.5f};
 
 // ================================= State ===================================
-enum class Mode { kPid, kEdgeLeft, kEdgeRight, kLost, kDone };
+// kSearch/kAcquire/kDriveOn/kAlign: finding the line at the start.
+enum class Mode {
+  kSearch, kAcquire, kDriveOn, kAlign,
+  kPid, kEdgeLeft, kEdgeRight, kLost, kDone
+};
 
 struct SensorReading {
   uint16_t raw[kNumSensors];  // Discharge time, us, robot's left to right.
@@ -138,6 +197,7 @@ struct SensorReading {
   bool on_line[kNumSensors];  // norm >= kOnLineThreshold.
   float position = 0.0f;      // Weighted average, -2.5 .. +2.5.
   float strength = 0.0f;      // Sum of weighted norms.
+  float max_norm = 0.0f;      // Strongest sensor (decides line_visible).
   bool line_visible = false;
   uint32_t read_us = 0;       // How long the read took.
 };
@@ -155,6 +215,7 @@ uint16_t g_cal_samples[kMaxCalibrationSamples][kNumSensors];
 int g_cal_sample_count = 0;
 bool g_initialized = false;
 int g_last_on_line_count = 0;  // For auton: sensors on the line, last step.
+bool g_calibrated = false;  // g_min/g_max hold real values.
 uint32_t g_auton_start_ms = 0;
 uint32_t g_last_step_ms = 0;
 uint32_t g_last_pid_us = 0;
@@ -164,9 +225,23 @@ float g_previous_error = 0.0f;
 bool g_has_previous_error = false;
 float g_last_position = 0.0f;
 Mode g_mode = Mode::kPid;
+int g_bend_side = 0;           // -1 left / +1 right: last one-sided wide read.
+uint32_t g_bend_seen_ms = 0;   // When it was seen (0 = none).
+uint32_t g_phase_start_ms = 0;  // When the current find-the-line step began.
+float g_first_seen_pos = 0.0f;  // Where the line first appeared (ACQUIRE).
+bool g_align_right = true;      // ALIGN pivot direction.
+bool g_align_left_line = false;  // ALIGN: center has left the line once.
 
 const char* ModeName(Mode mode) {
   switch (mode) {
+    case Mode::kSearch:
+      return "SEARCH";
+    case Mode::kAcquire:
+      return "ACQUIRE";
+    case Mode::kDriveOn:
+      return "DRIVE_ON";
+    case Mode::kAlign:
+      return "ALIGN";
     case Mode::kPid:
       return "PID";
     case Mode::kEdgeLeft:
@@ -203,6 +278,7 @@ void ReadSensors(SensorReading* reading) {
 
   float weighted_sum = 0.0f;
   reading->strength = 0.0f;
+  reading->max_norm = 0.0f;
   for (int i = 0; i < kNumSensors; ++i) {
     const int hw_index = kReverseSensorOrder ? (kNumSensors - 1 - i) : i;
     reading->raw[i] = hw[hw_index];
@@ -217,13 +293,15 @@ void ReadSensors(SensorReading* reading) {
     }
     reading->norm[i] = value;
     reading->on_line[i] = value >= kOnLineThreshold;
+    if (value > reading->max_norm) reading->max_norm = value;
 
     const float weight = value < kNoiseFloor ? 0.0f : value;
     weighted_sum += weight * kSensorPosition[i];
     reading->strength += weight;
   }
 
-  reading->line_visible = reading->strength >= kLostLineSum;
+  reading->line_visible = reading->max_norm >= kLineSeenThreshold &&
+                          reading->strength > 0.0f;
   reading->position =
       reading->line_visible ? weighted_sum / reading->strength : 0.0f;
 }
@@ -406,6 +484,7 @@ void Calibrate() {
   }
   SetDrive(0, 0);
   PrintCalibration(elapsed_ms, samples);
+  g_calibrated = true;
 }
 
 void PrintConfig() {
@@ -426,6 +505,13 @@ void PrintConfig() {
   Serial.printf("[LF] base=%d min=%d period=%lums auton=%lums\n", kBaseSpeed,
                 kMinSpeed, static_cast<unsigned long>(kControlPeriodMs),
                 static_cast<unsigned long>(kAutonDurationMs));
+  Serial.printf("[LF] max_reverse=%d%%  remember_bends=%s (>=%d sensors, "
+                "|pos|>=%.1f, %lums)\n",
+                kMaxReverse, kRememberBends ? "ON" : "OFF", kWideSensorCount,
+                kBendMinOffset, static_cast<unsigned long>(kBranchMemoryMs));
+  Serial.printf("[LF] line seen if a sensor >= %.2f (else LOST); position "
+                "ignores readings < %.2f. Status 'max=0.xx(<seen)' = line lost.\n",
+                kLineSeenThreshold, kNoiseFloor);
   Serial.println("[LF] Status line: t, dt (time since last PID step), read "
                  "(sensor read time), mode, n (0=floor 1=line, left->right), "
                  "pos (<0 = line on left), gains, P/I/D terms, corr, speeds");
@@ -435,14 +521,15 @@ void PrintStatus(uint32_t now_ms, float dt_ms, const SensorReading& reading,
                  const PidTerms& pid, int speed, int left, int right) {
   Serial.printf(
       "[LF] t=%lu dt=%.1fms read=%.1fms mode=%-6s "
-      "n=[%.2f %.2f %.2f %.2f %.2f %.2f] pos=%+.2f "
+      "n=[%.2f %.2f %.2f %.2f %.2f %.2f] max=%.2f%s pos=%+.2f "
       "kp=%.1f ki=%.2f kd=%.2f P=%+.1f I=%+.1f D=%+.1f corr=%+.1f "
       "spd=%d L=%d R=%d\n",
       static_cast<unsigned long>(now_ms - g_auton_start_ms), dt_ms,
       reading.read_us / 1000.0f, ModeName(g_mode), reading.norm[0],
       reading.norm[1], reading.norm[2], reading.norm[3], reading.norm[4],
-      reading.norm[5], reading.position, pid.kp, pid.ki, pid.kd, pid.p, pid.i,
-      pid.d, pid.correction, speed, left, right);
+      reading.norm[5], reading.max_norm,
+      reading.line_visible ? "" : "(<seen)", reading.position, pid.kp,
+      pid.ki, pid.kd, pid.p, pid.i, pid.d, pid.correction, speed, left, right);
 }
 
 void SetMode(Mode mode, uint32_t now_ms) {
@@ -482,6 +569,8 @@ void RunCalibrationTest(uint32_t now_ms) {
       reading.read_us / 1000.0f);
 }
 
+void StartRun(uint32_t now_ms);  // Defined below, with the find-line steps.
+
 void Initialize() {
   g_initialized = true;
   if (kCalibrationTestMode) {
@@ -508,35 +597,164 @@ void Initialize() {
       g_min[i] = kSavedMin[i];
       g_max[i] = kSavedMax[i];
     }
+    g_calibrated = true;
     Serial.println("[LF] Using saved calibration (kSavedMin / kSavedMax).");
   }
   ResetPid();
   g_auton_start_ms = millis();  // Start the clock after calibration.
   g_last_pid_us = micros();
+  StartRun(g_auton_start_ms);
 }
 
-}  // namespace
+// A center sensor (S2 or S3) is on the line.
+bool CenterOnLine(const SensorReading& r) {
+  return r.on_line[2] || r.on_line[3];
+}
 
-void Update() {
-  const uint32_t now_ms = millis();
-  if (!g_initialized) Initialize();
+void EnterPhase(Mode mode, uint32_t now_ms) {
+  SetMode(mode, now_ms);
+  g_phase_start_ms = now_ms;
+}
 
-  if (kCalibrationTestMode) {
-    RunCalibrationTest(now_ms);
-    return;
+// Sets the wheels for a pivot toward g_align_right.
+void AlignPivot(int* left, int* right) {
+  *left = g_align_right ? kAlignSpeed : -kAlignSpeed;
+  *right = -*left;
+}
+
+// Puts the robot in its first mode for a new run: SEARCH, or PID directly.
+void StartRun(uint32_t now_ms) {
+  g_mode = kSearchForLine ? Mode::kSearch : Mode::kPid;
+  g_phase_start_ms = now_ms;
+  if (kDebugPrint) {
+    if (kSearchForLine) {
+      Serial.printf("[LF] start: SEARCH, driving straight at %d%% until the "
+                    "line is seen (acquire at angle: %s)\n",
+                    kSearchSpeed, kAcquireAtAngle ? "ON" : "OFF");
+    } else {
+      Serial.println("[LF] start: PID (robot should already be on the line)");
+    }
   }
+}
 
-  if (g_mode == Mode::kDone) return;
-  if (now_ms - g_auton_start_ms >= kAutonDurationMs) {
-    SetDrive(0, 0);
-    SetMode(Mode::kDone, now_ms);
-    Serial.printf("[LF] Autonomous time up after %lu ms. Motors stopped.\n",
-                  static_cast<unsigned long>(kAutonDurationMs));
-    return;
+// Finding the line: SEARCH -> ACQUIRE -> (DRIVE_ON -> ALIGN) -> PID.
+// Returns true and sets the wheels while in one of these steps. Returns
+// false once the robot is in a normal following mode, so ControlStep runs
+// the usual PID / edge / lost logic (also on the step where we switch).
+bool FindLineStep(const SensorReading& reading, uint32_t now_ms, int* left,
+                  int* right) {
+  const uint32_t in_phase = now_ms - g_phase_start_ms;
+  switch (g_mode) {
+    case Mode::kSearch:
+      if (reading.line_visible) {
+        g_first_seen_pos = reading.position;
+        if (kDebugPrint) {
+          Serial.printf("[LF] SEARCH: line found after %lu ms at pos %+.2f\n",
+                        static_cast<unsigned long>(in_phase),
+                        reading.position);
+        }
+        if (!kAcquireAtAngle) {
+          ResetPid();
+          SetMode(Mode::kPid, now_ms);
+          return false;
+        }
+        EnterPhase(Mode::kAcquire, now_ms);
+        *left = *right = kAcquireSpeed;
+        return true;
+      }
+      if (in_phase >= kSearchTimeoutMs) {
+        Serial.printf("[LF] SEARCH: no line after %lu ms. Stopped.\n",
+                      static_cast<unsigned long>(in_phase));
+        SetMode(Mode::kDone, now_ms);
+        *left = *right = 0;
+        return true;
+      }
+      *left = *right = kSearchSpeed;
+      return true;
+
+    case Mode::kAcquire: {
+      if (!reading.line_visible) {
+        if (kDebugPrint) {
+          Serial.println("[LF] ACQUIRE: line gone before the center saw it "
+                         "(false hit?), searching again");
+        }
+        EnterPhase(Mode::kSearch, now_ms);
+        *left = *right = kSearchSpeed;
+        return true;
+      }
+      if (!CenterOnLine(reading)) {  // Keep creeping, edge rule off.
+        *left = *right = kAcquireSpeed;
+        return true;
+      }
+      // + sweep = the line moved left -> right across the bar.
+      const float sweep = reading.position - g_first_seen_pos;
+      const bool clear = fabsf(sweep) >= kMinSweep;
+      const bool shallow = in_phase > kShallowSweepMs;
+      g_align_right = clear ? sweep > 0.0f : kDefaultTurnRight;
+      if (kDebugPrint) {
+        Serial.printf(
+            "[LF] ACQUIRE: center on line after %lu ms, line moved %+.2f "
+            "across the bar (%s) -> %s\n",
+            static_cast<unsigned long>(in_phase), sweep,
+            clear ? (sweep > 0.0f ? "left->right" : "right->left")
+                  : "no clear direction, using default",
+            shallow ? "shallow angle: start PID"
+                    : (g_align_right ? "steep: drive on, then turn RIGHT"
+                                     : "steep: drive on, then turn LEFT"));
+      }
+      if (shallow) {
+        ResetPid();
+        g_last_position = reading.position;
+        SetMode(Mode::kPid, now_ms);
+        return false;
+      }
+      EnterPhase(Mode::kDriveOn, now_ms);
+      *left = *right = kAcquireSpeed;
+      return true;
+    }
+
+    case Mode::kDriveOn:
+      if (in_phase >= kDriveOnMs) {
+        g_align_left_line = !CenterOnLine(reading);
+        EnterPhase(Mode::kAlign, now_ms);
+        AlignPivot(left, right);
+        return true;
+      }
+      *left = *right = kAcquireSpeed;
+      return true;
+
+    case Mode::kAlign:
+      if (!CenterOnLine(reading)) g_align_left_line = true;
+      if (in_phase >= kAlignMinMs && g_align_left_line &&
+          CenterOnLine(reading)) {
+        if (kDebugPrint) {
+          Serial.printf("[LF] ALIGN: lined up after %lu ms, following\n",
+                        static_cast<unsigned long>(in_phase));
+        }
+        ResetPid();
+        g_last_position = reading.position;
+        SetMode(Mode::kPid, now_ms);
+        return false;
+      }
+      if (in_phase >= kAlignTimeoutMs) {
+        Serial.printf("[LF] ALIGN: line not found after %lu ms, following "
+                      "anyway\n",
+                      static_cast<unsigned long>(in_phase));
+        ResetPid();
+        SetMode(Mode::kPid, now_ms);
+        return false;
+      }
+      AlignPivot(left, right);
+      return true;
+
+    default:
+      return false;
   }
-  if (now_ms - g_last_step_ms < kControlPeriodMs) return;
-  g_last_step_ms = now_ms;
+}
 
+// One control step: read sensors, pick a mode (PID / edge pivot / lost),
+// drive the wheels, and print a status line every kDebugPrintPeriodMs.
+void ControlStep(uint32_t now_ms) {
   SensorReading reading;
   ReadSensors(&reading);
   g_last_on_line_count = 0;
@@ -552,6 +770,38 @@ void Update() {
   int speed = 0;
   int left = 0;
   int right = 0;
+
+  if (g_mode == Mode::kDone) {  // e.g. SEARCH gave up.
+    SetDrive(0, 0);
+    return;
+  }
+  // Finding the line at the start (SEARCH / ACQUIRE / DRIVE_ON / ALIGN).
+  if (FindLineStep(reading, now_ms, &left, &right)) {
+    SetDrive(left, right);
+    if (kDebugPrint && now_ms - g_last_print_ms >= kDebugPrintPeriodMs) {
+      g_last_print_ms = now_ms;
+      const int speed_now = left == right ? left : 0;  // 0 while pivoting.
+      PrintStatus(now_ms, dt_s * 1000.0f, reading, pid, speed_now, left,
+                  right);
+    }
+    return;
+  }
+
+  // Many sensors on tape: a bend (tape mostly on one side) or an
+  // intersection (tape on both sides). Remember a bend's side.
+  if (kRememberBends) {
+    int on_count = 0;
+    for (int i = 0; i < kNumSensors; ++i) on_count += reading.on_line[i];
+    if (on_count >= kWideSensorCount) {
+      if (fabsf(reading.position) >= kBendMinOffset) {
+        g_bend_side = reading.position < 0.0f ? -1 : 1;
+        g_bend_seen_ms = now_ms;
+      } else {
+        g_bend_seen_ms = 0;  // Even on both sides: intersection, go straight.
+      }
+    }
+  }
+
   const bool outer_left = reading.on_line[0];
   const bool outer_right = reading.on_line[kNumSensors - 1];
 
@@ -600,14 +850,34 @@ void Update() {
     speed = static_cast<int>(kBaseSpeed *
                              (1.0f - kSlowdownPerError * fabsf(error)));
     speed = max(speed, kMinSpeed);
-    // Like LF-2, wheels never reverse while following.
-    left = constrain(static_cast<int>(speed + pid.correction), 0, 100);
-    right = constrain(static_cast<int>(speed - pid.correction), 0, 100);
+    // The inner wheel may reverse (down to -kMaxReverse) on sharp turns.
+    left = constrain(static_cast<int>(speed + pid.correction), -kMaxReverse,
+                     100);
+    right = constrain(static_cast<int>(speed - pid.correction), -kMaxReverse,
+                      100);
     g_last_position = reading.position;
   } else {
-    // Line lost: pivot toward the side it was last seen on.
+    // Line lost: pivot toward a bend seen just before (the line turned),
+    // otherwise toward the side the line was last seen on.
+    const bool entering = g_mode != Mode::kLost;
     SetMode(Mode::kLost, now_ms);
-    if (g_last_position < 0.0f) {
+    const bool recent_bend = kRememberBends && g_bend_seen_ms != 0 &&
+                             now_ms - g_bend_seen_ms < kBranchMemoryMs;
+    const bool turn_left =
+        recent_bend ? g_bend_side < 0 : g_last_position < 0.0f;
+    if (entering && kDebugPrint) {
+      if (recent_bend) {
+        Serial.printf("[LF] line lost: turning %s toward the bend seen %lu "
+                      "ms ago\n",
+                      turn_left ? "LEFT" : "RIGHT",
+                      static_cast<unsigned long>(now_ms - g_bend_seen_ms));
+      } else {
+        Serial.printf("[LF] line lost: turning %s (last pos %+.2f, no "
+                      "recent bend)\n",
+                      turn_left ? "LEFT" : "RIGHT", g_last_position);
+      }
+    }
+    if (turn_left) {
       left = -kLostTurnSpeed;
       right = kLostTurnSpeed;
     } else {
@@ -624,6 +894,78 @@ void Update() {
   }
 }
 
+}  // namespace
+
+void Update() {
+  const uint32_t now_ms = millis();
+  if (!g_initialized) Initialize();
+
+  if (kCalibrationTestMode) {
+    RunCalibrationTest(now_ms);
+    return;
+  }
+
+  if (g_mode == Mode::kDone) return;
+  if (now_ms - g_auton_start_ms >= kAutonDurationMs) {
+    SetDrive(0, 0);
+    SetMode(Mode::kDone, now_ms);
+    Serial.printf("[LF] Autonomous time up after %lu ms. Motors stopped.\n",
+                  static_cast<unsigned long>(kAutonDurationMs));
+    return;
+  }
+  if (now_ms - g_last_step_ms < kControlPeriodMs) return;
+  g_last_step_ms = now_ms;
+
+  ControlStep(now_ms);
+}
+
+void CalibrateNow() { Calibrate(); }
+
+bool FollowFor(uint32_t duration_ms, bool (*should_abort)()) {
+  if (!g_calibrated) {
+    for (int i = 0; i < kNumSensors; ++i) {
+      g_min[i] = kSavedMin[i];
+      g_max[i] = kSavedMax[i];
+    }
+    g_calibrated = true;
+    Serial.println("[LF] Not calibrated yet: using kSavedMin / kSavedMax. "
+                   "Run the calibrate test first for real values.");
+  }
+  Serial.printf("[LF] Following for %lu ms: Kp=%.2f Ki=%.3f Kd=%.3f base=%d "
+                "auto_gain=%s\n",
+                static_cast<unsigned long>(duration_ms), kKp, kKi, kKd,
+                kBaseSpeed, kUseAutoGain ? "ON" : "OFF");
+  ResetPid();
+  g_last_position = 0.0f;
+  g_bend_side = 0;
+  g_bend_seen_ms = 0;
+  g_auton_start_ms = millis();
+  g_last_step_ms = 0;
+  g_last_print_ms = 0;
+  g_last_pid_us = micros();
+  StartRun(g_auton_start_ms);
+
+  bool completed = true;
+  while (millis() - g_auton_start_ms < duration_ms) {
+    if (should_abort != nullptr && should_abort()) {
+      completed = false;
+      break;
+    }
+    const uint32_t now_ms = millis();
+    if (now_ms - g_last_step_ms >= kControlPeriodMs) {
+      g_last_step_ms = now_ms;
+      ControlStep(now_ms);
+    }
+    if (g_mode == Mode::kDone) break;  // e.g. SEARCH found no line.
+    delay(1);
+  }
+  SetDrive(0, 0);
+  Serial.printf("[LF] Follow %s after %lu ms. Motors stopped.\n",
+                completed ? "finished" : "ABORTED",
+                static_cast<unsigned long>(millis() - g_auton_start_ms));
+  return completed;
+}
+
 // ------------------------- Hooks for src/auton.cpp -------------------------
 
 void Init() {
@@ -638,6 +980,11 @@ void StartFollowing() {
   g_last_step_ms = 0;
   g_last_pid_us = micros();
   g_last_on_line_count = 0;
+  // Added in the merge with test: the line was already found by auton's
+  // FIND_LINE stage, so follow right away (no SEARCH) and forget bends.
+  g_bend_side = 0;
+  g_bend_seen_ms = 0;
+  g_last_position = 0.0f;
 }
 
 bool SeesLine() {

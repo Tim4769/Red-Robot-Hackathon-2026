@@ -10,6 +10,8 @@
 #ifndef RED_ROBOT_LINE_FOLLOWER_H_
 #define RED_ROBOT_LINE_FOLLOWER_H_
 
+#include <stdint.h>
+
 namespace line_follower {
 
 // Runs one iteration of the line follower (or of the calibration test, if
@@ -34,6 +36,18 @@ int LastOnLineCount();
 
 // True when kCalibrationTestMode is on (Update() only prints sensor values).
 bool IsCalibrationTestMode();
+
+// For the test console (src/drive_test.cpp):
+
+// Runs the calibration routine now (hand / sweep / full rotation, per the
+// settings in line_follower.cpp) and prints the [CAL] report. Blocking.
+void CalibrateNow();
+
+// Follows the line for `duration_ms` using the same control step as
+// Update(), printing [LF] status lines. Stops early if `should_abort`
+// returns true. Motors are stopped on return. Returns true if it ran the
+// full duration. Uses kSavedMin/kSavedMax if CalibrateNow() hasn't run.
+bool FollowFor(uint32_t duration_ms, bool (*should_abort)());
 
 }  // namespace line_follower
 

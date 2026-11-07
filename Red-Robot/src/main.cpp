@@ -2,6 +2,7 @@
 #include <RedRobot.h>
 
 #include "auton.h"
+#include "drive_test.h"
 #include "hardware_test.h"
 #include "line_follower.h"
 
@@ -11,8 +12,12 @@
 //   kLineFollower = line following only (src/line_follower.cpp)
 //   kActuatorTest = each motor, then each servo, one by one, once
 //   kDriveTest    = forward, backward, pivot left, pivot right, once
-enum class AutonMode { kFullAuton, kLineFollower, kActuatorTest, kDriveTest };
-constexpr AutonMode kAutonMode = AutonMode::kFullAuton;
+//   kTestConsole  = serial menu to pick drivetrain tests (src/drive_test.cpp)
+enum class AutonMode {
+  kFullAuton, kLineFollower, kActuatorTest, kDriveTest, kTestConsole
+};
+// Test console = what was verified on the robot. For matches use kFullAuton.
+constexpr AutonMode kAutonMode = AutonMode::kTestConsole;
 
 // initialize any variables here
 void setup() {
@@ -39,6 +44,9 @@ void AutonomousLoop() {
       break;
     case AutonMode::kLineFollower:
       line_follower::Update();  // Tuning/test switches: src/line_follower.cpp
+      break;
+    case AutonMode::kTestConsole:
+      drive_test::Update();
       break;
   }
 }
