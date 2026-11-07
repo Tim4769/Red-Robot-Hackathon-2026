@@ -33,7 +33,10 @@ constexpr uint32_t kYForwardMs = 1000;
 constexpr uint32_t kYFollowTimeoutMs = 15000;  // Stop if the line never ends.
 
 // ============================ Claw mechanism ===============================
-// CHECK THESE against how the claw is wired, then tune the angles.
+// Servo number <-> board connector (from the club's board netlist):
+//   servo 0 = J4, servo 1 = J5, servo 2 = J6, servo 3 = J7.
+// Wired: up/down on J7 (servo 3), claw on J5 (servo 1). Rotation: J6 is a
+// guess (servo 2); change kRotateServo if it's on J4 (servo 0).
 
 // Right stick Y moves the claw up/down (X is ignored).
 //   kLiftUsesMotor = true:  DC motor kLiftMotor runs at the stick's speed,
@@ -41,23 +44,23 @@ constexpr uint32_t kYFollowTimeoutMs = 15000;  // Stop if the line never ends.
 //                           DC motor port: 0/2 drive, 1 is disabled.)
 //   kLiftUsesMotor = false: servo kLiftServo moves kLiftServoStep degrees per
 //                           stick update while pushed, and stays put.
-constexpr bool kLiftUsesMotor = true;
+constexpr bool kLiftUsesMotor = false;  // Up/down is a servo (J7).
 constexpr uint8_t kLiftMotor = 3;
 constexpr bool kInvertLift = false;    // Flip if stick-up moves it down.
 constexpr int kLiftPercent = 60;       // Max lift speed, % of the stick.
 constexpr int kStickDeadzone = 15;     // Ignore small stick wobble.
-constexpr uint8_t kLiftServo = 2;
+constexpr uint8_t kLiftServo = 3;      // J7.
 constexpr int kLiftServoStep = 3;      // Degrees per update (servo mode).
 constexpr int kLiftServoMin = 0;
 constexpr int kLiftServoMax = 180;
 
 // B toggles the claw between open and closed.
-constexpr uint8_t kClawServo = 0;
+constexpr uint8_t kClawServo = 1;      // J5.
 constexpr int kClawOpenAngle = 90;
 constexpr int kClawClosedAngle = 20;
 
 // A toggles the claw rotation between two angles.
-constexpr uint8_t kRotateServo = 1;
+constexpr uint8_t kRotateServo = 2;    // J6 (guess, see above).
 constexpr int kRotateAngleA = 0;
 constexpr int kRotateAngleB = 90;
 
