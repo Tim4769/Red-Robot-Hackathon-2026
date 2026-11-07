@@ -446,6 +446,7 @@ void Execute(char* line) {
 void Update() {
   const bool connected = static_cast<bool>(Serial);
   if (connected && !g_was_connected) {
+    delay(300);  // Let the monitor finish opening, or the first lines drop.
     PrintBootInfo();
     PrintMenu();
     PrintPrompt();
