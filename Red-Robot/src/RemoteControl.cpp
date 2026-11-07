@@ -3,9 +3,9 @@
 #include "line_follower.h"
 
 // Club controller (RR_Controller) layout:
-//   Left stick   one-stick layout (the default): all driving
-//   Right stick  up/down = claw up/down (split layout: left/right = turn)
-//                (kDriveLayout = kSplitStick: left Y drives, right X turns)
+//   Left stick   up/down = forward/back (split layout, the default)
+//   Right stick  left/right = turn, up/down = claw up/down
+//                (kDriveLayout = kOneStick: left stick does all driving)
 //   X  line run + turn (test 9)      Y  delayed line run
 //      Either one: switches to driver control, runs its routine, then
 //      the sticks take over. X or Y again = cancel (-> driver now).
@@ -28,7 +28,7 @@ constexpr bool kInvertRight = false;
 //   kSplitStick: LEFT stick up/down = forward/back, RIGHT stick left/right =
 //                turn. (Right stick up/down is still the claw lift.)
 enum class DriveLayout { kOneStick, kSplitStick };
-constexpr DriveLayout kDriveLayout = DriveLayout::kOneStick;
+constexpr DriveLayout kDriveLayout = DriveLayout::kSplitStick;
 
 // Stick sensitivity, in percent of the stick value. 100 = original.
 constexpr int kJoystickDrivePercent = 80;  // Forward/back.
