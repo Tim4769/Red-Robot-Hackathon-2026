@@ -127,8 +127,12 @@ constexpr float kIntegralLimit = 2.0f;      // |integral| cap (error x second).
 
 // Normalized-value thresholds (0 = floor, 1 = line).
 constexpr float kOnLineThreshold = 0.5f;  // LF-2's (min + max) / 2 midpoint.
-constexpr float kNoiseFloor = 0.1f;       // Ignore weaker readings.
-constexpr float kLostLineSum = 0.3f;      // Total below this: line is lost.
+constexpr float kNoiseFloor = 0.2f;       // Ignore weaker readings (floor
+                                          // noise) in the position average.
+// The line counts as seen only if at least ONE sensor reads at least this.
+// (It used to be "sum of all sensors >= 0.3", which a slightly dark floor
+// reaches on 2-3 sensors, so a lost line was never detected.)
+constexpr float kLineSeenThreshold = 0.4f;
 
 // ================================= Bends ===================================
 // When kWideSensorCount or more sensors see tape (a bend or an intersection),
@@ -155,6 +159,7 @@ struct SensorReading {
   bool on_line[kNumSensors];  // norm >= kOnLineThreshold.
   float position = 0.0f;      // Weighted average, -2.5 .. +2.5.
   float strength = 0.0f;      // Sum of weighted norms.
+  float max_norm = 0.0f;      // Strongest sensor (decides line_visible).
   bool line_visible = false;
   uint32_t read_us = 0;       // How long the read took.
 };
@@ -222,6 +227,7 @@ void ReadSensors(SensorReading* reading) {
 
   float weighted_sum = 0.0f;
   reading->strength = 0.0f;
+  reading->max_norm = 0.0f;
   for (int i = 0; i < kNumSensors; ++i) {
     const int hw_index = kReverseSensorOrder ? (kNumSensors - 1 - i) : i;
     reading->raw[i] = hw[hw_index];
@@ -236,13 +242,15 @@ void ReadSensors(SensorReading* reading) {
     }
     reading->norm[i] = value;
     reading->on_line[i] = value >= kOnLineThreshold;
+    if (value > reading->max_norm) reading->max_norm = value;
 
     const float weight = value < kNoiseFloor ? 0.0f : value;
     weighted_sum += weight * kSensorPosition[i];
     reading->strength += weight;
   }
 
-  reading->line_visible = reading->strength >= kLostLineSum;
+  reading->line_visible = reading->max_norm >= kLineSeenThreshold &&
+                          reading->strength > 0.0f;
   reading->position =
       reading->line_visible ? weighted_sum / reading->strength : 0.0f;
 }
@@ -450,6 +458,9 @@ void PrintConfig() {
                 "|pos|>=%.1f, %lums)\n",
                 kMaxReverse, kRememberBends ? "ON" : "OFF", kWideSensorCount,
                 kBendMinOffset, static_cast<unsigned long>(kBranchMemoryMs));
+  Serial.printf("[LF] line seen if a sensor >= %.2f (else LOST); position "
+                "ignores readings < %.2f. Status "max=0.xx(<seen)" = line lost.\n",
+                kLineSeenThreshold, kNoiseFloor);
   Serial.println("[LF] Status line: t, dt (time since last PID step), read "
                  "(sensor read time), mode, n (0=floor 1=line, left->right), "
                  "pos (<0 = line on left), gains, P/I/D terms, corr, speeds");
@@ -459,14 +470,15 @@ void PrintStatus(uint32_t now_ms, float dt_ms, const SensorReading& reading,
                  const PidTerms& pid, int speed, int left, int right) {
   Serial.printf(
       "[LF] t=%lu dt=%.1fms read=%.1fms mode=%-6s "
-      "n=[%.2f %.2f %.2f %.2f %.2f %.2f] pos=%+.2f "
+      "n=[%.2f %.2f %.2f %.2f %.2f %.2f] max=%.2f%s pos=%+.2f "
       "kp=%.1f ki=%.2f kd=%.2f P=%+.1f I=%+.1f D=%+.1f corr=%+.1f "
       "spd=%d L=%d R=%d\n",
       static_cast<unsigned long>(now_ms - g_auton_start_ms), dt_ms,
       reading.read_us / 1000.0f, ModeName(g_mode), reading.norm[0],
       reading.norm[1], reading.norm[2], reading.norm[3], reading.norm[4],
-      reading.norm[5], reading.position, pid.kp, pid.ki, pid.kd, pid.p, pid.i,
-      pid.d, pid.correction, speed, left, right);
+      reading.norm[5], reading.max_norm,
+      reading.line_visible ? "" : "(<seen)", reading.position, pid.kp,
+      pid.ki, pid.kd, pid.p, pid.i, pid.d, pid.correction, speed, left, right);
 }
 
 void SetMode(Mode mode, uint32_t now_ms) {
