@@ -1,8 +1,11 @@
 #include <RedRobot.h>
 
+#include "line_follower.h"
+
 // Club controller (RR_Controller) layout:
 //   Left stick   drive (arcade)      Right stick  claw up/down (Y only)
-//   X  start driver control          Y  not assigned yet ("delay": TBD)
+//   X  start driver control          Y  delayed line run (press again
+//                                       to cancel), see "Y routine"
 //   A  rotate claw (toggle)          B  open / close claw (toggle)
 
 // Drive wiring (matches src/line_follower.cpp and the drive test):
@@ -14,10 +17,20 @@ constexpr uint8_t kRightMotor = 2;
 constexpr bool kInvertLeft = true;
 constexpr bool kInvertRight = false;
 
-// Joystick turning sensitivity (arcade drive, left stick X), in percent of
-// the stick's left/right value. 100 = original (very twitchy), 50 = full
-// sideways stick turns half as hard. Forward/back (Y) is unchanged.
-constexpr int kJoystickTurnPercent = 50;
+// Left stick sensitivity (arcade drive), in percent of the stick value.
+// 100 = original. Lower = gentler.
+constexpr int kJoystickDrivePercent = 80;  // Forward/back (stick Y).
+constexpr int kJoystickTurnPercent = 40;   // Left/right (stick X). Was 50.
+
+// ============================== Y routine ==================================
+// Y (after X): wait kYStartDelayMs, drive straight kYForwardMs, then follow
+// the line and STOP when it ends (like console test 9 without the
+// back/turn/forward). Press Y again to cancel. Drive stick and D-pad are
+// ignored while it runs; the claw still works.
+constexpr uint32_t kYStartDelayMs = 5000;
+constexpr int kYForwardSpeed = 40;
+constexpr uint32_t kYForwardMs = 1000;
+constexpr uint32_t kYFollowTimeoutMs = 15000;  // Stop if the line never ends.
 
 // ============================ Claw mechanism ===============================
 // CHECK THESE against how the claw is wired, then tune the angles.
@@ -51,6 +64,8 @@ constexpr int kRotateAngleB = 90;
 bool g_claw_closed = false;   // Assume it starts open.
 bool g_rotated = false;       // Assume it starts at kRotateAngleA.
 int g_lift_servo_angle = 90;  // Servo mode: current lift angle.
+volatile bool g_routine_running = false;  // Y routine active.
+volatile bool g_routine_cancel = false;   // Y pressed again: stop it.
 
 void DriveLeft(int speed) {
   speed = constrain(speed, -100, 100);
@@ -60,6 +75,49 @@ void DriveLeft(int speed) {
 void DriveRight(int speed) {
   speed = constrain(speed, -100, 100);
   RedRobot::WriteDCMotor(kRightMotor, kInvertRight ? -speed : speed);
+}
+
+bool RoutineCancelled() { return g_routine_cancel; }
+
+// Waits `ms` in 10 ms steps. Returns false if the routine was cancelled.
+bool RoutineWait(uint32_t ms) {
+  const uint32_t start = millis();
+  while (millis() - start < ms) {
+    if (g_routine_cancel) return false;
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  return true;
+}
+
+// Runs in its own task so the Bluetooth callbacks stay responsive.
+void YRoutineTask(void*) {
+  Serial.printf("[RC] Y routine: waiting %lu ms (press Y again to "
+                "cancel)\n",
+                static_cast<unsigned long>(kYStartDelayMs));
+  bool ok = RoutineWait(kYStartDelayMs);
+  if (ok) {
+    Serial.printf("[RC] Y routine: forward %d%% for %lu ms\n",
+                  kYForwardSpeed, static_cast<unsigned long>(kYForwardMs));
+    DriveLeft(kYForwardSpeed);
+    DriveRight(kYForwardSpeed);
+    ok = RoutineWait(kYForwardMs);
+    DriveLeft(0);
+    DriveRight(0);
+  }
+  if (ok) {
+    Serial.println("[RC] Y routine: following the line");
+    // Prints LINE ENDED / did NOT end, and stops the motors itself.
+    line_follower::FollowUntilLineEnds(0, kYFollowTimeoutMs,
+                                       &RoutineCancelled);
+  }
+  DriveLeft(0);
+  DriveRight(0);
+  Serial.println(g_routine_cancel
+                     ? "[RC] Y routine: CANCELLED, motors stopped"
+                     : "[RC] Y routine: finished, motors stopped");
+  g_routine_cancel = false;
+  g_routine_running = false;
+  vTaskDelete(nullptr);
 }
 }  // namespace
 
@@ -158,9 +216,11 @@ namespace RR_Controller
   // Left stick: arcade drive.
   void Joystick1(int8_t x, int8_t y)
   {
+    if (g_routine_running) return;  // Y routine is driving.
+    const int drive = y * kJoystickDrivePercent / 100;
     const int turn = x * kJoystickTurnPercent / 100;  // Less twitchy turns.
-    int leftMotor = y + turn;
-    int rightMotor = y - turn;
+    int leftMotor = drive + turn;
+    int rightMotor = drive - turn;
 
     // Normalize to [-100, 100]
     int maxMagnitude = max(abs(leftMotor), abs(rightMotor));
@@ -202,6 +262,8 @@ namespace RR_Controller
    */
   void DPad_Pressed(button_t Button, bool buttonPressedDown)
   {
+    if (g_routine_running) return;  // Y routine is driving.
+
     // values stay the same between calls to DPad_Pressed
     static bool button_pressed[5] = {false, false, false, false, false};
 
@@ -252,11 +314,29 @@ namespace RR_Controller
     }
   }
 
-  // Y: reserved for the "delay" action (not decided yet).
+  // Y: start the delayed line run, or cancel it if it's running.
   void ButtonY_Pressed(bool buttonPressedDown)
   {
-    if (buttonPressedDown)
-      Serial.println("[RC] Y pressed: not assigned yet");
+    if (!buttonPressedDown) return;
+    if (g_routine_running)
+    {
+      g_routine_cancel = true;
+      Serial.println("[RC] Y: cancelling the routine");
+      return;
+    }
+    if (!RedRobot::IsRemoteControlled())
+    {
+      Serial.println("[RC] Y: press X first (driver control)");
+      return;
+    }
+    g_routine_cancel = false;
+    g_routine_running = true;
+    if (xTaskCreate(YRoutineTask, "yRoutine", 8192, nullptr, 1, nullptr) !=
+        pdPASS)
+    {
+      g_routine_running = false;
+      Serial.println("[RC] Y: could not start the routine task");
+    }
   }
 
   // B: open / close the claw.
