@@ -35,8 +35,8 @@ constexpr uint32_t kYFollowTimeoutMs = 15000;  // Stop if the line never ends.
 // ============================ Claw mechanism ===============================
 // Servo number <-> board connector (from the club's board netlist):
 //   servo 0 = J4, servo 1 = J5, servo 2 = J6, servo 3 = J7.
-// Wired: up/down on J7 (servo 3), claw on J5 (servo 1). Rotation: J6 is a
-// guess (servo 2); change kRotateServo if it's on J4 (servo 0).
+// Wired: up/down on J7 (servo 3), claw on J5 (servo 1), rotation on J6
+// (servo 2). All confirmed by the team.
 
 // Right stick Y moves the claw up/down (X is ignored).
 //   kLiftUsesMotor = true:  DC motor kLiftMotor runs at the stick's speed,
@@ -60,7 +60,7 @@ constexpr int kClawOpenAngle = 90;
 constexpr int kClawClosedAngle = 20;
 
 // A toggles the claw rotation between two angles.
-constexpr uint8_t kRotateServo = 2;    // J6 (guess, see above).
+constexpr uint8_t kRotateServo = 2;    // J6.
 constexpr int kRotateAngleA = 0;
 constexpr int kRotateAngleB = 90;
 
