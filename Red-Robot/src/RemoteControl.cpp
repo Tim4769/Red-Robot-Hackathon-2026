@@ -55,7 +55,7 @@ constexpr uint32_t kXForwardMs = 1000;
 // the line), then follow the line and STOP when it ends.
 constexpr uint32_t kYStartDelayMs = 5000;
 constexpr int kYForwardSpeed = 40;
-constexpr uint32_t kYForwardMs = 1000;
+constexpr uint32_t kYForwardMs = 2000;   // Was 1000: double the distance.
 constexpr uint32_t kYFollowTimeoutMs = 15000;  // Stop if the line never ends.
 
 // ============================ Claw mechanism ===============================
