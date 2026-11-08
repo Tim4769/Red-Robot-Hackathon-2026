@@ -87,7 +87,7 @@ constexpr int kClawClosedAngle = 20;
 // A toggles the claw rotation between two angles.
 constexpr uint8_t kRotateServo = 2;    // J6.
 constexpr int kRotateAngleA = 0;
-constexpr int kRotateAngleB = 90;
+constexpr int kRotateAngleB = 180;     // Max (library range is 0..180). Was 90.
 
 bool g_claw_closed = false;   // Assume it starts open.
 bool g_rotated = false;       // Assume it starts at kRotateAngleA.
