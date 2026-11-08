@@ -4,7 +4,7 @@
 
 // Club controller (RR_Controller) layout:
 //   Left stick   one-stick layout (the default): all driving
-//   Right stick  up/down = claw up/down (split layout: left/right = turn)
+//   Right stick  up/down = DC motor 3, slow (split layout: left/right = turn)
 //                (kDriveLayout = kSplitStick: left Y drives, right X turns)
 //   X  line run + turn (test 9)      Y  delayed line run
 //      Either one: switches to driver control, runs its routine, then
@@ -68,10 +68,10 @@ constexpr uint32_t kYFollowTimeoutMs = 15000;  // Stop if the line never ends.
 //   kLiftUsesMotor = false: servo kLiftServo moves SMOOTHLY while the stick
 //                           is pushed (a 20 ms loop; speed ~ how far it's
 //                           pushed, up to kLiftDegPerSec) and stays put.
-constexpr bool kLiftUsesMotor = false;  // Up/down is a servo (J7).
+constexpr bool kLiftUsesMotor = true;   // Right stick runs DC motor 3.
 constexpr uint8_t kLiftMotor = 3;
 constexpr bool kInvertLift = false;    // Flip if stick-up moves it down.
-constexpr int kLiftPercent = 60;       // Max lift speed, % of the stick.
+constexpr int kLiftPercent = 30;       // Max motor speed (slow). Was 60.
 constexpr int kStickDeadzone = 15;     // Ignore small stick wobble.
 constexpr uint8_t kLiftServo = 3;      // J7.
 constexpr float kLiftDegPerSec = 150.0f;  // Servo speed at full stick.
