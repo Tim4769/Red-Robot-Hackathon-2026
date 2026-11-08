@@ -60,6 +60,11 @@ bool FollowFor(uint32_t duration_ms, bool (*should_abort)());
 bool FollowUntilLineEnds(uint32_t arm_ms, uint32_t timeout_ms,
                          bool (*should_abort)(), bool find_line_first = false);
 
+// Follows the line for exactly `duration_ms` (starting straight in PID: put
+// the robot ON the line), with the normal lost-line handling, then stops the
+// motors. Does not stop at a line end. Returns false if aborted.
+bool FollowOnLineFor(uint32_t duration_ms, bool (*should_abort)());
+
 }  // namespace line_follower
 
 #endif  // RED_ROBOT_LINE_FOLLOWER_H_

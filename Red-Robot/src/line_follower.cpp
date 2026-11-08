@@ -1117,4 +1117,44 @@ bool FollowUntilLineEnds(uint32_t arm_ms, uint32_t timeout_ms,
   return false;
 }
 
+bool FollowOnLineFor(uint32_t duration_ms, bool (*should_abort)()) {
+  if (!g_calibrated) {
+    for (int i = 0; i < kNumSensors; ++i) {
+      g_min[i] = kSavedMin[i];
+      g_max[i] = kSavedMax[i];
+    }
+    g_calibrated = true;
+    Serial.println("[LF] Not calibrated yet: using kSavedMin / kSavedMax.");
+  }
+  Serial.printf("[LF] Following for %lu ms (from on the line): Kp=%.2f "
+                "Kd=%.3f base=%d\n",
+                static_cast<unsigned long>(duration_ms), kKp, kKd, kBaseSpeed);
+  ResetPid();
+  g_mode = Mode::kPid;  // No line finder: the robot starts on the line.
+  g_last_position = 0.0f;
+  g_bend_side = 0;
+  g_bend_seen_ms = 0;
+  g_auton_start_ms = millis();
+  g_last_step_ms = 0;
+  g_last_print_ms = 0;
+  g_last_pid_us = micros();
+
+  while (millis() - g_auton_start_ms < duration_ms) {
+    if (should_abort != nullptr && should_abort()) {
+      SetDrive(0, 0);
+      return false;
+    }
+    const uint32_t now_ms = millis();
+    if (now_ms - g_last_step_ms >= kControlPeriodMs) {
+      g_last_step_ms = now_ms;
+      ControlStep(now_ms);
+    }
+    delay(1);
+  }
+  SetDrive(0, 0);
+  Serial.printf("[LF] Followed for %lu ms. Motors stopped.\n",
+                static_cast<unsigned long>(duration_ms));
+  return true;
+}
+
 }  // namespace line_follower

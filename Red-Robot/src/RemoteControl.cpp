@@ -6,7 +6,7 @@
 //   Left stick   one-stick layout (the default): all driving
 //   Right stick  up/down = DC motor 3, slow (split layout: left/right = turn)
 //                (kDriveLayout = kSplitStick: left Y drives, right X turns)
-//   X  line run + turn (test 9)      Y  delayed line run
+//   X  follow 5 s, claw, back/turn   Y  delayed line run
 //      Either one: switches to driver control, runs its routine, then
 //      the sticks take over. X or Y again = cancel (-> driver now).
 //      Press X twice for driver control without a routine.
@@ -37,10 +37,12 @@ constexpr int kJoystickTurnPercent = 40;   // Turning. Was 50.
 // =============================== Routines ==================================
 // Drive stick is ignored while a routine runs; the claw still works.
 //
-// X: like console test 9 but WITHOUT its blind forward drive at the start
-// (start the robot on the line): follow the line, and when it ends: back up,
-// turn right ~120 deg, forward, stop.
-constexpr uint32_t kXFollowTimeoutMs = 20000;  // Stop if it never ends.
+// X (start the robot ON the line): follow the line for kXFollowMs (counted
+// from pressing X; it doesn't wait for the line to end), toggle the claw
+// like pressing B, wait kXClawWaitMs, then back up, turn right ~120 deg,
+// forward, stop.
+constexpr uint32_t kXFollowMs = 5000;
+constexpr uint32_t kXClawWaitMs = 500;         // Let the claw servo move.
 constexpr int kXBackSpeed = 40;
 constexpr uint32_t kXBackMs = 500;
 constexpr int kXTurnSpeed = 35;
@@ -158,13 +160,24 @@ bool RoutineDrive(int left, int right, uint32_t ms) {
   return ok;
 }
 
-// X: follow, and at the line end: back, turn right, forward.
+// Opens / closes the claw (what B does). Used by B and by the X routine.
+void ToggleClaw(const char* who) {
+  g_claw_closed = !g_claw_closed;
+  const int angle = g_claw_closed ? kClawClosedAngle : kClawOpenAngle;
+  RedRobot::SetServo(kClawServo, angle);
+  Serial.printf("[RC] %s: claw %s (servo %u -> %d deg)\n", who,
+                g_claw_closed ? "CLOSED" : "OPEN", kClawServo, angle);
+}
+
+// X: follow 5 s, toggle the claw, then back, turn right, forward.
 void RunLineEndTurn() {
-  Serial.println("[RC] X: following the line");
-  if (!line_follower::FollowUntilLineEnds(0, kXFollowTimeoutMs,
-                                          &RoutineCancelled)) {
-    return;  // Timed out or cancelled; it printed why.
+  Serial.printf("[RC] X: following the line for %lu ms\n",
+                static_cast<unsigned long>(kXFollowMs));
+  if (!line_follower::FollowOnLineFor(kXFollowMs, &RoutineCancelled)) {
+    return;  // Cancelled.
   }
+  ToggleClaw("X");
+  if (!RoutineWait(kXClawWaitMs)) return;
   Serial.printf("[RC] X: back %lu ms\n", static_cast<unsigned long>(kXBackMs));
   if (!RoutineDrive(-kXBackSpeed, -kXBackSpeed, kXBackMs)) return;
   Serial.printf("[RC] X: turn right %lu ms (~120 deg)\n",
@@ -415,12 +428,7 @@ namespace RR_Controller
   // B: open / close the claw.
   void ButtonB_Pressed(bool buttonPressedDown)
   {
-    if (!buttonPressedDown) return;
-    g_claw_closed = !g_claw_closed;
-    const int angle = g_claw_closed ? kClawClosedAngle : kClawOpenAngle;
-    RedRobot::SetServo(kClawServo, angle);
-    Serial.printf("[RC] B: claw %s (servo %u -> %d deg)\n",
-                  g_claw_closed ? "CLOSED" : "OPEN", kClawServo, angle);
+    if (buttonPressedDown) ToggleClaw("B");
   }
 
   // A: rotate the claw between two angles.
