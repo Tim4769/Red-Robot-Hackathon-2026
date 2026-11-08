@@ -63,7 +63,9 @@ bool FollowUntilLineEnds(uint32_t arm_ms, uint32_t timeout_ms,
 // Follows the line for exactly `duration_ms` (starting straight in PID: put
 // the robot ON the line), with the normal lost-line handling, then stops the
 // motors. Does not stop at a line end. Returns false if aborted.
-bool FollowOnLineFor(uint32_t duration_ms, bool (*should_abort)());
+// `base_speed` > 0 overrides kBaseSpeed for this run only.
+bool FollowOnLineFor(uint32_t duration_ms, bool (*should_abort)(),
+                     int base_speed = 0);
 
 }  // namespace line_follower
 

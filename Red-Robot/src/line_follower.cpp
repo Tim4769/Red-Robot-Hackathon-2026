@@ -238,6 +238,7 @@ float g_last_position = 0.0f;
 Mode g_mode = Mode::kPid;
 int g_bend_side = 0;           // -1 left / +1 right: last one-sided wide read.
 uint32_t g_bend_seen_ms = 0;   // When it was seen (0 = none).
+int g_base_speed = kBaseSpeed;  // Straight-line speed for the current run.
 uint32_t g_phase_start_ms = 0;  // When the current find-the-line step began.
 float g_first_seen_pos = 0.0f;  // Where the line first appeared (ACQUIRE).
 bool g_align_right = true;      // ALIGN pivot direction.
@@ -858,7 +859,7 @@ void ControlStep(uint32_t now_ms) {
     pid.correction = pid.p + pid.i + pid.d;
 
     // Slow down on big errors so both wheels stay in range on curves.
-    speed = static_cast<int>(kBaseSpeed *
+    speed = static_cast<int>(g_base_speed *
                              (1.0f - kSlowdownPerError * fabsf(error)));
     speed = max(speed, kMinSpeed);
     // The inner wheel may reverse (down to -kMaxReverse) on sharp turns.
@@ -1117,7 +1118,8 @@ bool FollowUntilLineEnds(uint32_t arm_ms, uint32_t timeout_ms,
   return false;
 }
 
-bool FollowOnLineFor(uint32_t duration_ms, bool (*should_abort)()) {
+bool FollowOnLineFor(uint32_t duration_ms, bool (*should_abort)(),
+                     int base_speed) {
   if (!g_calibrated) {
     for (int i = 0; i < kNumSensors; ++i) {
       g_min[i] = kSavedMin[i];
@@ -1126,9 +1128,11 @@ bool FollowOnLineFor(uint32_t duration_ms, bool (*should_abort)()) {
     g_calibrated = true;
     Serial.println("[LF] Not calibrated yet: using kSavedMin / kSavedMax.");
   }
+  g_base_speed = base_speed > 0 ? base_speed : kBaseSpeed;
   Serial.printf("[LF] Following for %lu ms (from on the line): Kp=%.2f "
                 "Kd=%.3f base=%d\n",
-                static_cast<unsigned long>(duration_ms), kKp, kKd, kBaseSpeed);
+                static_cast<unsigned long>(duration_ms), kKp, kKd,
+                g_base_speed);
   ResetPid();
   g_mode = Mode::kPid;  // No line finder: the robot starts on the line.
   g_last_position = 0.0f;
@@ -1142,6 +1146,7 @@ bool FollowOnLineFor(uint32_t duration_ms, bool (*should_abort)()) {
   while (millis() - g_auton_start_ms < duration_ms) {
     if (should_abort != nullptr && should_abort()) {
       SetDrive(0, 0);
+      g_base_speed = kBaseSpeed;
       return false;
     }
     const uint32_t now_ms = millis();
@@ -1154,6 +1159,7 @@ bool FollowOnLineFor(uint32_t duration_ms, bool (*should_abort)()) {
   SetDrive(0, 0);
   Serial.printf("[LF] Followed for %lu ms. Motors stopped.\n",
                 static_cast<unsigned long>(duration_ms));
+  g_base_speed = kBaseSpeed;
   return true;
 }
 

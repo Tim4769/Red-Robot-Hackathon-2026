@@ -42,6 +42,7 @@ constexpr int kJoystickTurnPercent = 40;   // Turning. Was 50.
 // like pressing B, wait kXClawWaitMs, then back up, turn right ~120 deg,
 // forward, stop.
 constexpr uint32_t kXFollowMs = 5000;
+constexpr int kXFollowSpeed = 60;  // X's line-following speed (others: 45).
 constexpr uint32_t kXClawWaitMs = 500;         // Let the claw servo move.
 constexpr int kXBackSpeed = 40;
 constexpr uint32_t kXBackMs = 500;
@@ -173,7 +174,8 @@ void ToggleClaw(const char* who) {
 void RunLineEndTurn() {
   Serial.printf("[RC] X: following the line for %lu ms\n",
                 static_cast<unsigned long>(kXFollowMs));
-  if (!line_follower::FollowOnLineFor(kXFollowMs, &RoutineCancelled)) {
+  if (!line_follower::FollowOnLineFor(kXFollowMs, &RoutineCancelled,
+                                      kXFollowSpeed)) {
     return;  // Cancelled.
   }
   ToggleClaw("X");
