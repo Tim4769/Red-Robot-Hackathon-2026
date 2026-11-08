@@ -81,7 +81,7 @@ constexpr int kLiftServoMax = 180;
 
 // B toggles the claw between open and closed.
 constexpr uint8_t kClawServo = 1;      // J5.
-constexpr int kClawOpenAngle = 110;    // Was 90: opens 20 deg wider.
+constexpr int kClawOpenAngle = 120;    // Was 90: opens 30 deg wider.
 constexpr int kClawClosedAngle = 20;
 
 // A toggles the claw rotation between two angles.
